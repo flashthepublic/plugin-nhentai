@@ -42,12 +42,11 @@ fn test_lookup_empty_name_returns_404() {
 
 #[test]
 fn test_lookup_exhibitionism_live_when_enabled() {
-
     let mut plugin = build_plugin();
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
-            name: Some("exhibitionism".to_string()),
+            name: Some("cheating".to_string()),
             ids: None,
         }),
         credential: None,
@@ -82,4 +81,72 @@ fn test_lookup_exhibitionism_live_when_enabled() {
             .unwrap_or(false),
         "Expected at least one image in the first result"
     );
+}
+
+#[test]
+fn test_lookup_direct_id_629637_live_when_enabled() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("nhentai:629637".to_string()),
+            ids: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    let results_array = results.as_array().expect("Expected an array").clone();
+    assert!(
+        !results_array.is_empty(),
+        "Expected at least one result for direct id nhentai:629637"
+    );
+
+    let first = &results_array[0];
+    let book = first
+        .get("metadata")
+        .and_then(|m| m.get("book"))
+        .expect("Expected book metadata");
+
+    assert_eq!(
+        book.get("id").and_then(|v| v.as_str()),
+        Some("nhentai:629637"),
+        "Expected direct-id lookup to preserve nhentai id"
+    );
+
+    assert_eq!(
+        book.get("params")
+            .and_then(|v| v.get("nhentaiId"))
+            .and_then(|v| v.as_str()),
+        Some("629637"),
+        "Expected params.nhentaiId to match the requested id"
+    );
+
+    assert_eq!(
+        book.get("params")
+            .and_then(|v| v.get("nhentaiUrl"))
+            .and_then(|v| v.as_str()),
+        Some("https://nhentai.net/g/629637/"),
+        "Expected params.nhentaiUrl to point to the direct gallery URL"
+    );
+
+    assert!(
+        book.get("params")
+            .and_then(|v| v.get("artists"))
+            .and_then(|v| v.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false),
+        "Expected at least one artist extracted from the gallery page"
+    );
+
+    assert!(
+        first
+            .get("images")
+            .and_then(|v| v.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false),
+        "Expected at least one image in direct-id lookup result"
+    );
+    
 }
