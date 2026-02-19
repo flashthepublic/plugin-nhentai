@@ -1,0 +1,16 @@
+[package]
+name = "rs-plugin-nh"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+extism-pdk = "1.4.1"
+rs-plugin-common-interfaces = "0.27.4"
+scraper = "0.24"
+serde_json = "1"
+
+[dev-dependencies]
+extism = "1"
