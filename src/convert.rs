@@ -142,6 +142,7 @@ fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
             modified: 0,
             added: 0,
             generated: true,
+            otherids: Some(vec![value.id.clone()].into()),
             path: "/".to_string(),
         })
         .collect()
