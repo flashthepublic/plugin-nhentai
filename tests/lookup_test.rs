@@ -1,7 +1,7 @@
 use extism::*;
 use rs_plugin_common_interfaces::lookup::{
     RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
-    RsLookupWrapper,
+    RsLookupSourceResult, RsLookupWrapper,
 };
 
 fn build_plugin() -> Plugin {
@@ -219,4 +219,39 @@ fn test_lookup_direct_id_624988_parodies_returned() {
     );
 }
 
+#[test]
+fn test_lookup_571095_returns_group_download() {
+    let mut plugin = build_plugin();
 
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("nhentai:571095".to_string()),
+            ids: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let input_str = serde_json::to_string(&input).unwrap();
+    let output = plugin
+        .call::<&str, &[u8]>("lookup", &input_str)
+        .expect("lookup call failed");
+    let result: RsLookupSourceResult = serde_json::from_slice(output).expect("Failed to parse lookup output");
+
+    match result {
+        RsLookupSourceResult::GroupRequest(groups) => {
+            assert!(!groups.is_empty(), "Expected at least one group");
+            let group = &groups[0];
+            assert!(group.group, "Expected group flag to be true");
+            assert!(
+                !group.requests.is_empty(),
+                "Expected multiple image requests in group"
+            );
+            println!("Got {} images for nhentai:571095", group.requests.len());
+            for req in &group.requests {
+                println!("  {}", req.url);
+            }
+        }
+        other => panic!("Expected GroupRequest, got {:?}", other),
+    }
+}

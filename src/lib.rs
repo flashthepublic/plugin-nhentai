@@ -3,7 +3,8 @@ use std::collections::HashSet;
 
 use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
-    lookup::{RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupWrapper},
+    lookup::{RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult, RsLookupWrapper},
+    request::{RsGroupDownload, RsRequest},
     PluginInformation, PluginType,
 };
 
@@ -25,8 +26,8 @@ enum LookupTarget<'a> {
 pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
-        capabilities: vec![PluginType::LookupMetadata],
-        version: 5,
+        capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
+        version: 6,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -168,6 +169,51 @@ pub fn lookup_metadata_images(
         .collect();
 
     Ok(Json(deduplicate_images(images)))
+}
+
+#[plugin_fn]
+pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSourceResult>> {
+    let book = match &lookup.query {
+        RsLookupQuery::Book(book) => book,
+        _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
+    };
+
+    let gallery_id = match resolve_book_lookup_target(book) {
+        Some(LookupTarget::DirectGallery(id)) => id,
+        _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
+    };
+
+    let galleries = execute_gallery_request(&gallery_id)?;
+
+    if galleries.is_empty() {
+        return Ok(Json(RsLookupSourceResult::NotFound));
+    }
+
+    let gallery = &galleries[0];
+
+    let requests: Vec<RsRequest> = gallery
+        .images
+        .iter()
+        .map(|url| RsRequest {
+            url: url.clone(),
+            permanent: true,
+            instant: Some(true),
+            ..Default::default()
+        })
+        .collect();
+
+    let group_download = RsGroupDownload {
+        group: true,
+        group_thumbnail_url: if gallery.cover_url.is_empty() {
+            None
+        } else {
+            Some(gallery.cover_url.clone())
+        },
+        requests,
+        ..Default::default()
+    };
+
+    Ok(Json(RsLookupSourceResult::GroupRequest(vec![group_download])))
 }
 
 fn deduplicate_images(images: Vec<ExternalImage>) -> Vec<ExternalImage> {
