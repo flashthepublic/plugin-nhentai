@@ -609,7 +609,7 @@ fn parse_thumbnail_image_urls(document: &Html) -> Vec<String> {
 
 fn thumbnail_to_image_url(thumbnail_url: &str) -> Option<String> {
     let thumb_re = Regex::new(
-        r#"^https?://(?:t\d*|t)\.nhentai\.net/galleries/(?P<gallery>\d+)/(?P<page>\d+)t\.(?P<ext>jpg|png|gif|webp)$"#,
+        r#"^https?://(?:t\d*|t)\.nhentai\.net/galleries/(?P<gallery>\d+)/(?P<page>\d+)t\.(?P<ext>jpg|png|gif|webp)(?:\.\w+)?$"#,
     )
     .expect("valid thumbnail regex");
 
@@ -925,6 +925,30 @@ mod tests {
         assert_eq!(
             result.images,
             vec!["https://i.nhentai.net/galleries/987/1.jpg".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_gallery_html_thumbnail_fallback_handles_double_extension() {
+        let html = r#"
+        <html>
+          <body>
+            <h1 class="title">Double Ext Gallery</h1>
+            <div id="thumbnail-container">
+              <img data-src="https://t4.nhentai.net/galleries/123/1t.webp" />
+              <img data-src="https://t4.nhentai.net/galleries/123/2t.webp.webp" />
+            </div>
+          </body>
+        </html>
+        "#;
+
+        let result = parse_gallery_html(html, "123").expect("gallery should parse");
+        assert_eq!(
+            result.images,
+            vec![
+                "https://i.nhentai.net/galleries/123/1.webp".to_string(),
+                "https://i.nhentai.net/galleries/123/2.webp".to_string(),
+            ]
         );
     }
 
