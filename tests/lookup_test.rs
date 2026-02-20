@@ -1,5 +1,8 @@
 use extism::*;
-use rs_plugin_common_interfaces::lookup::{RsLookupBook, RsLookupQuery, RsLookupWrapper};
+use rs_plugin_common_interfaces::lookup::{
+    RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
+    RsLookupWrapper,
+};
 
 fn build_plugin() -> Plugin {
     let wasm = Wasm::file("target/wasm32-unknown-unknown/release/rs_plugin_nh.wasm");
@@ -7,12 +10,12 @@ fn build_plugin() -> Plugin {
     Plugin::new(&manifest, [], true).expect("Failed to create plugin")
 }
 
-fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> serde_json::Value {
+fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> Vec<RsLookupMetadataResultWrapper> {
     let input_str = serde_json::to_string(input).unwrap();
     let output = plugin
         .call::<&str, &[u8]>("lookup_metadata", &input_str)
         .expect("lookup_metadata call failed");
-    serde_json::from_slice(output).expect("Failed to parse output JSON")
+    serde_json::from_slice(output).expect("Failed to parse lookup output")
 }
 
 #[test]
@@ -54,29 +57,26 @@ fn test_lookup_exhibitionism_live_when_enabled() {
     };
 
     let results = call_lookup(&mut plugin, &input);
-    let results_array = results.as_array().expect("Expected an array");
-    println!("Lookup results: {results_array:#?}");
     assert!(
-        !results_array.is_empty(),
-        "Expected at least one result for 'exhibitionism'"
+        !results.is_empty(),
+        "Expected at least one result for 'cheating'"
     );
 
-    let first = &results_array[0];
+    let first = &results[0];
+    let book = match &first.metadata {
+        RsLookupMetadataResult::Book(book) => book,
+        _ => panic!("Expected book metadata"),
+    };
     assert!(
-        first
-            .get("metadata")
-            .and_then(|m| m.get("book"))
-            .and_then(|b| b.get("name"))
-            .and_then(|n| n.as_str())
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false),
+        !book.name.trim().is_empty(),
         "Expected a non-empty book name in the first result"
     );
 
     assert!(
         first
-            .get("images")
-            .and_then(|v| v.as_array())
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.ext_images.as_ref())
             .map(|arr| !arr.is_empty())
             .unwrap_or(false),
         "Expected at least one image in the first result"
@@ -97,26 +97,26 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
     };
 
     let results = call_lookup(&mut plugin, &input);
-    let results_array = results.as_array().expect("Expected an array").clone();
     assert!(
-        !results_array.is_empty(),
+        !results.is_empty(),
         "Expected at least one result for direct id nhentai:629637"
     );
 
-    let first = &results_array[0];
-    let book = first
-        .get("metadata")
-        .and_then(|m| m.get("book"))
-        .expect("Expected book metadata");
+    let first = &results[0];
+    let book = match &first.metadata {
+        RsLookupMetadataResult::Book(book) => book,
+        _ => panic!("Expected book metadata"),
+    };
 
     assert_eq!(
-        book.get("id").and_then(|v| v.as_str()),
+        Some(book.id.as_str()),
         Some("nhentai:629637"),
         "Expected direct-id lookup to preserve nhentai id"
     );
 
     assert_eq!(
-        book.get("params")
+        book.params
+            .as_ref()
             .and_then(|v| v.get("nhentaiId"))
             .and_then(|v| v.as_str()),
         Some("629637"),
@@ -124,7 +124,8 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
     );
 
     assert_eq!(
-        book.get("params")
+        book.params
+            .as_ref()
             .and_then(|v| v.get("nhentaiUrl"))
             .and_then(|v| v.as_str()),
         Some("https://nhentai.net/g/629637/"),
@@ -132,7 +133,8 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
     );
 
     assert!(
-        book.get("params")
+        book.params
+            .as_ref()
             .and_then(|v| v.get("artists"))
             .and_then(|v| v.as_array())
             .map(|arr| !arr.is_empty())
@@ -142,11 +144,26 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
 
     assert!(
         first
-            .get("images")
-            .and_then(|v| v.as_array())
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.ext_images.as_ref())
             .map(|arr| !arr.is_empty())
             .unwrap_or(false),
         "Expected at least one image in direct-id lookup result"
     );
-    
+
+    println!(
+        "Direct ID lookup result: tags {:?}",
+        first
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.tags_details.as_ref())
+    );
+    println!(
+        "Direct ID lookup result: people {:?}",
+        first
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.people_details.as_ref())
+    );
 }

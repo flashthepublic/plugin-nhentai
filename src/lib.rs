@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
-    lookup::{RsLookupBook, RsLookupMetadataResultWithImages, RsLookupQuery, RsLookupWrapper},
+    lookup::{RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupWrapper},
     PluginInformation, PluginType,
 };
 
@@ -26,7 +26,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 2,
+        version: 3,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -127,6 +127,7 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget<'_>> {
 
         if let Some(id) = ids.other_ids.as_ref().and_then(|other_ids| {
             other_ids
+                .as_slice()
                 .iter()
                 .find_map(|value| parse_lookup_gallery_id(value))
         }) {
@@ -144,7 +145,7 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget<'_>> {
 #[plugin_fn]
 pub fn lookup_metadata(
     Json(lookup): Json<RsLookupWrapper>,
-) -> FnResult<Json<Vec<RsLookupMetadataResultWithImages>>> {
+) -> FnResult<Json<Vec<RsLookupMetadataResultWrapper>>> {
     let galleries = lookup_galleries(&lookup)?;
 
     let results = galleries
@@ -233,7 +234,7 @@ mod tests {
         let book = RsLookupBook {
             name: Some("ignored text".to_string()),
             ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai:67890".to_string()]),
+                other_ids: Some(vec!["nhentai:67890".to_string()].into()),
                 ..Default::default()
             }),
         };

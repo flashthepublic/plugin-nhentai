@@ -2,6 +2,12 @@ use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NhentaiRelation {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NhentaiGallery {
     pub id: Option<String>,
     pub title: String,
@@ -16,6 +22,10 @@ pub struct NhentaiGallery {
     pub languages: Vec<String>,
     pub categories: Vec<String>,
     pub pages: Option<u32>,
+    pub people_ids: Vec<String>,
+    pub tag_ids: Vec<String>,
+    pub people_details: Vec<NhentaiRelation>,
+    pub tag_details: Vec<NhentaiRelation>,
 }
 
 pub fn build_search_url(search: &str) -> Option<String> {
@@ -159,6 +169,10 @@ pub fn parse_gallery_html(html: &str, gallery_id: &str) -> Option<NhentaiGallery
         languages: tag_buckets.languages,
         categories: tag_buckets.categories,
         pages,
+        people_ids: tag_buckets.people_ids,
+        tag_ids: tag_buckets.tag_ids,
+        people_details: tag_buckets.people_details,
+        tag_details: tag_buckets.tag_details,
     })
 }
 
@@ -201,6 +215,10 @@ struct TagBuckets {
     languages: Vec<String>,
     categories: Vec<String>,
     pages: Option<u32>,
+    people_ids: Vec<String>,
+    tag_ids: Vec<String>,
+    people_details: Vec<NhentaiRelation>,
+    tag_details: Vec<NhentaiRelation>,
 }
 
 fn parse_gallery_title(document: &Html) -> String {
@@ -253,7 +271,8 @@ fn parse_gallery_cover_url(document: &Html) -> String {
 fn parse_tag_buckets(document: &Html) -> TagBuckets {
     let container_selector =
         Selector::parse("#tags .tag-container, .tag-container").expect("valid tag selector");
-    let tag_name_selector = Selector::parse("a.tag span.name").expect("valid tag name selector");
+    let tag_selector = Selector::parse("a.tag").expect("valid tag selector");
+    let tag_name_selector = Selector::parse("span.name").expect("valid tag name selector");
 
     let mut out = TagBuckets::default();
 
@@ -262,48 +281,107 @@ fn parse_tag_buckets(document: &Html) -> TagBuckets {
             continue;
         };
 
-        let values = container
-            .select(&tag_name_selector)
-            .map(|el| normalize_text(&el.text().collect::<String>()))
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
+        let mut values = Vec::new();
+        let mut relation_ids = Vec::new();
+        let mut relation_details: Vec<NhentaiRelation> = Vec::new();
+        let fallback_key = relation_key_for_label(&label);
 
-        if values.is_empty() {
+        for anchor in container.select(&tag_selector) {
+            let mut value = anchor
+                .select(&tag_name_selector)
+                .next()
+                .map(|el| normalize_text(&el.text().collect::<String>()))
+                .unwrap_or_default();
+
+            if value.is_empty() {
+                value = normalize_text(&anchor.text().collect::<String>());
+            }
+
+            if !value.is_empty() && !values.iter().any(|existing| existing == &value) {
+                values.push(value.clone());
+            }
+
+            let href = anchor.value().attr("href").unwrap_or_default();
+            let key = parse_relation_key_from_href(href)
+                .or_else(|| fallback_key.map(str::to_string))
+                .unwrap_or_default();
+            if key.is_empty() {
+                continue;
+            }
+
+            let slug = parse_relation_slug_from_href(href).or_else(|| slugify_identifier(&value));
+            let Some(slug) = slug else {
+                continue;
+            };
+
+            let relation_id = format!("nhentai-{key}:{slug}");
+            if !relation_ids.iter().any(|existing| existing == &relation_id) {
+                relation_ids.push(relation_id.clone());
+            }
+
+            let relation_name = if value.is_empty() {
+                slug.replace('-', " ")
+            } else {
+                value.clone()
+            };
+            if !relation_name.is_empty() && !relation_details.iter().any(|r| r.id == relation_id) {
+                relation_details.push(NhentaiRelation {
+                    id: relation_id,
+                    name: relation_name,
+                });
+            }
+        }
+
+        if values.is_empty() && relation_ids.is_empty() {
             continue;
         }
 
         if label == "tags" {
             push_all_unique(&mut out.tags, values);
+            push_all_unique(&mut out.tag_ids, relation_ids);
+            push_all_unique_relations(&mut out.tag_details, relation_details);
             continue;
         }
 
         if label == "artists" || label == "artist" {
             push_all_unique(&mut out.artists, values);
+            push_all_unique(&mut out.people_ids, relation_ids);
+            push_all_unique_relations(&mut out.people_details, relation_details);
             continue;
         }
 
         if label == "groups" || label == "group" {
             push_all_unique(&mut out.groups, values);
+            push_all_unique(&mut out.people_ids, relation_ids);
+            push_all_unique_relations(&mut out.people_details, relation_details);
             continue;
         }
 
         if label == "parodies" || label == "parody" {
             push_all_unique(&mut out.parodies, values);
+            push_all_unique(&mut out.tag_ids, relation_ids);
+            push_all_unique_relations(&mut out.tag_details, relation_details);
             continue;
         }
 
         if label == "characters" || label == "character" {
             push_all_unique(&mut out.characters, values);
+            push_all_unique(&mut out.people_ids, relation_ids);
+            push_all_unique_relations(&mut out.people_details, relation_details);
             continue;
         }
 
         if label == "languages" || label == "language" {
             push_all_unique(&mut out.languages, values);
+            push_all_unique(&mut out.tag_ids, relation_ids);
+            push_all_unique_relations(&mut out.tag_details, relation_details);
             continue;
         }
 
         if label == "categories" || label == "category" {
             push_all_unique(&mut out.categories, values);
+            push_all_unique(&mut out.tag_ids, relation_ids);
+            push_all_unique_relations(&mut out.tag_details, relation_details);
             continue;
         }
 
@@ -313,6 +391,94 @@ fn parse_tag_buckets(document: &Html) -> TagBuckets {
     }
 
     out
+}
+
+fn relation_key_for_label(label: &str) -> Option<&'static str> {
+    match label {
+        "tags" | "tag" => Some("tags"),
+        "artists" | "artist" => Some("artist"),
+        "groups" | "group" => Some("group"),
+        "parodies" | "parody" => Some("parody"),
+        "characters" | "character" => Some("character"),
+        "languages" | "language" => Some("language"),
+        "categories" | "category" => Some("category"),
+        _ => None,
+    }
+}
+
+fn parse_relation_key_from_href(href: &str) -> Option<String> {
+    let normalized = normalize_url(href);
+    let path = normalized
+        .strip_prefix("https://nhentai.net/")
+        .or_else(|| normalized.strip_prefix("http://nhentai.net/"))
+        .or_else(|| normalized.strip_prefix("https://www.nhentai.net/"))
+        .or_else(|| normalized.strip_prefix("http://www.nhentai.net/"))
+        .unwrap_or(normalized.as_str());
+    let cleaned = path
+        .split_once('?')
+        .map(|(left, _)| left)
+        .unwrap_or(path)
+        .split_once('#')
+        .map(|(left, _)| left)
+        .unwrap_or(path);
+
+    let mut segments = cleaned
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty());
+
+    let key = segments.next()?.to_ascii_lowercase();
+    if key == "tag" {
+        Some("tags".to_string())
+    } else {
+        Some(key)
+    }
+}
+
+fn parse_relation_slug_from_href(href: &str) -> Option<String> {
+    let normalized = normalize_url(href);
+    let path = normalized
+        .strip_prefix("https://nhentai.net/")
+        .or_else(|| normalized.strip_prefix("http://nhentai.net/"))
+        .or_else(|| normalized.strip_prefix("https://www.nhentai.net/"))
+        .or_else(|| normalized.strip_prefix("http://www.nhentai.net/"))
+        .unwrap_or(normalized.as_str());
+    let cleaned = path
+        .split_once('?')
+        .map(|(left, _)| left)
+        .unwrap_or(path)
+        .split_once('#')
+        .map(|(left, _)| left)
+        .unwrap_or(path);
+
+    cleaned
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .next_back()
+        .map(|segment| segment.to_ascii_lowercase())
+}
+
+fn slugify_identifier(value: &str) -> Option<String> {
+    let mut slug = String::new();
+    let mut prev_dash = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            slug.push('-');
+            prev_dash = true;
+        }
+    }
+
+    let trimmed = slug.trim_matches('-');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn parse_tag_container_label(container: &ElementRef<'_>) -> Option<String> {
@@ -485,6 +651,14 @@ fn push_all_unique(target: &mut Vec<String>, values: Vec<String>) {
     }
 }
 
+fn push_all_unique_relations(target: &mut Vec<NhentaiRelation>, values: Vec<NhentaiRelation>) {
+    for value in values {
+        if !target.iter().any(|existing| existing.id == value.id) {
+            target.push(value);
+        }
+    }
+}
+
 fn deduplicate_strings(values: Vec<String>) -> Vec<String> {
     let mut out = Vec::new();
 
@@ -634,23 +808,23 @@ mod tests {
             <div id="tags">
               <div class="tag-container field-name">
                 <span class="name">Artists:</span>
-                <span class="tags"><a class="tag"><span class="name">artist-one</span></a></span>
+                <span class="tags"><a class="tag" href="/artist/artist-one/"><span class="name">artist-one</span></a></span>
               </div>
               <div class="tag-container field-name">
                 <span class="name">Groups:</span>
-                <span class="tags"><a class="tag"><span class="name">group-one</span></a></span>
+                <span class="tags"><a class="tag" href="/group/group-one/"><span class="name">group-one</span></a></span>
               </div>
               <div class="tag-container field-name">
                 <span class="name">Tags:</span>
-                <span class="tags"><a class="tag"><span class="name">full color</span></a></span>
+                <span class="tags"><a class="tag" href="/tag/full-color/"><span class="name">full color</span></a></span>
               </div>
               <div class="tag-container field-name">
                 <span class="name">Languages:</span>
-                <span class="tags"><a class="tag"><span class="name">english</span></a></span>
+                <span class="tags"><a class="tag" href="/language/english/"><span class="name">english</span></a></span>
               </div>
               <div class="tag-container field-name">
                 <span class="name">Categories:</span>
-                <span class="tags"><a class="tag"><span class="name">doujinshi</span></a></span>
+                <span class="tags"><a class="tag" href="/category/doujinshi/"><span class="name">doujinshi</span></a></span>
               </div>
               <div class="tag-container field-name">
                 <span class="name">Pages:</span>
@@ -677,6 +851,51 @@ mod tests {
         assert_eq!(result.tags, vec!["full color".to_string()]);
         assert_eq!(result.languages, vec!["english".to_string()]);
         assert_eq!(result.categories, vec!["doujinshi".to_string()]);
+        assert_eq!(
+            result.people_ids,
+            vec![
+                "nhentai-artist:artist-one".to_string(),
+                "nhentai-group:group-one".to_string()
+            ]
+        );
+        assert_eq!(
+            result.people_details,
+            vec![
+                NhentaiRelation {
+                    id: "nhentai-artist:artist-one".to_string(),
+                    name: "artist-one".to_string()
+                },
+                NhentaiRelation {
+                    id: "nhentai-group:group-one".to_string(),
+                    name: "group-one".to_string()
+                }
+            ]
+        );
+        assert_eq!(
+            result.tag_ids,
+            vec![
+                "nhentai-tags:full-color".to_string(),
+                "nhentai-language:english".to_string(),
+                "nhentai-category:doujinshi".to_string()
+            ]
+        );
+        assert_eq!(
+            result.tag_details,
+            vec![
+                NhentaiRelation {
+                    id: "nhentai-tags:full-color".to_string(),
+                    name: "full color".to_string()
+                },
+                NhentaiRelation {
+                    id: "nhentai-language:english".to_string(),
+                    name: "english".to_string()
+                },
+                NhentaiRelation {
+                    id: "nhentai-category:doujinshi".to_string(),
+                    name: "doujinshi".to_string()
+                }
+            ]
+        );
         assert_eq!(result.pages, Some(24));
         assert_eq!(
             result.images,
@@ -753,5 +972,16 @@ mod tests {
 
         let result = parse_gallery_html(html, "629637").expect("gallery should parse");
         assert_eq!(result.artists, vec!["bai asuka".to_string()]);
+        assert_eq!(
+            result.people_ids,
+            vec!["nhentai-artist:bai-asuka".to_string()]
+        );
+        assert_eq!(
+            result.people_details,
+            vec![NhentaiRelation {
+                id: "nhentai-artist:bai-asuka".to_string(),
+                name: "bai asuka".to_string()
+            }]
+        );
     }
 }
