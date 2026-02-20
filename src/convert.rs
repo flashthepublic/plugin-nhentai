@@ -2,8 +2,8 @@ use rs_plugin_common_interfaces::{
     domain::{
         book::Book,
         external_images::{ExternalImage, ImageType},
-        media::FileEpisode,
         person::Person,
+        serie::Serie,
         tag::Tag,
         Relations,
     },
@@ -67,7 +67,7 @@ pub fn nhentai_gallery_to_result(item: NhentaiGallery) -> RsLookupMetadataResult
             } else {
                 Some(tag_details)
             },
-            series: if series.is_empty() {
+            series_details: if series.is_empty() {
                 None
             } else {
                 Some(series)
@@ -155,7 +155,7 @@ fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
         .collect()
 }
 
-fn build_series(values: &[NhentaiRelation]) -> Vec<FileEpisode> {
+fn build_series(values: &[NhentaiRelation]) -> Vec<Serie> {
     values
         .iter()
         .filter(|value| {
@@ -163,11 +163,10 @@ fn build_series(values: &[NhentaiRelation]) -> Vec<FileEpisode> {
                 && !value.name.trim().is_empty()
                 && value.name.to_ascii_lowercase() != "original"
         })
-        .map(|value| FileEpisode {
+        .map(|value| Serie {
             id: value.id.clone(),
-            season: None,
-            episode: None,
-            episode_to: None,
+            name: value.name.clone(),
+            ..Default::default()
         })
         .collect()
 }
@@ -275,5 +274,34 @@ mod tests {
         assert_eq!(tags[0].name, "full color");
         assert!(relations.people.is_none());
         assert!(relations.tags.is_none());
+    }
+
+    #[test]
+    fn maps_parodies_as_series_details_skipping_original() {
+        let result = nhentai_gallery_to_result(NhentaiGallery {
+            id: Some("282849".to_string()),
+            title: "Parody Sample".to_string(),
+            cover_url: "https://t3.nhentai.net/galleries/111/thumb.jpg".to_string(),
+            gallery_url: "https://nhentai.net/g/282849/".to_string(),
+            parody_details: vec![
+                NhentaiRelation {
+                    id: "nhentai-parody:naruto".to_string(),
+                    name: "naruto".to_string(),
+                },
+                NhentaiRelation {
+                    id: "nhentai-parody:original".to_string(),
+                    name: "original".to_string(),
+                },
+            ],
+            ..Default::default()
+        });
+
+        let relations = result.relations.expect("expected relations");
+        let series = relations.series_details.expect("expected series_details");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id, "nhentai-parody:naruto");
+        assert_eq!(series[0].name, "naruto");
+        assert!(relations.tags_details.is_none());
     }
 }

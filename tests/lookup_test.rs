@@ -151,7 +151,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .unwrap_or(false),
         "Expected at least one image in direct-id lookup result"
     );
-
+/*
     println!(
         "Direct ID lookup result: tags {:?}",
         first
@@ -165,5 +165,58 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .relations
             .as_ref()
             .and_then(|relations| relations.people_details.as_ref())
+    );*/
+}
+
+
+#[test]
+fn test_lookup_direct_id_624988_parodies_returned() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("nhentai:624988".to_string()),
+            ids: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.is_empty(),
+        "Expected at least one result for direct id nhentai:624988"
+    );
+
+    let first = &results[0];
+    let book = match &first.metadata {
+        RsLookupMetadataResult::Book(book) => book,
+        _ => panic!("Expected book metadata"),
+    };
+
+    assert_eq!(
+        Some(book.id.as_str()),
+        Some("nhentai:624988"),
+        "Expected direct-id lookup to preserve nhentai id"
+    );
+
+    assert!(
+        book.params
+            .as_ref()
+            .and_then(|v| v.get("parodies"))
+            .and_then(|v| v.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false),
+        "Expected at least one parody extracted from the gallery page"
+    );
+
+    println!(
+        "Direct ID lookup result: tags {:?}",
+        first
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.series.as_ref())
     );
 }
+
+

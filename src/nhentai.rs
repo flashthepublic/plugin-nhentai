@@ -986,4 +986,37 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn parse_gallery_html_reads_parody_into_parody_details() {
+        let html = r#"
+        <html>
+          <body>
+            <h1 class="title">Parody Work</h1>
+            <div id="tags">
+              <div class="tag-container field-name">
+                Parodies:
+                <span class="tags">
+                  <a href="/parody/naruto/" class="tag">
+                    <span class="name">naruto</span>
+                  </a>
+                </span>
+              </div>
+            </div>
+          </body>
+        </html>
+        "#;
+
+        let result = parse_gallery_html(html, "282849").expect("gallery should parse");
+        assert_eq!(result.parodies, vec!["naruto".to_string()]);
+        assert_eq!(
+            result.parody_details,
+            vec![NhentaiRelation {
+                id: "nhentai-parody:naruto".to_string(),
+                name: "naruto".to_string()
+            }]
+        );
+        assert!(result.tag_details.is_empty());
+        assert!(result.tag_ids.is_empty());
+    }
 }
