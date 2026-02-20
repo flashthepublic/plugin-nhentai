@@ -27,7 +27,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 6,
+        version: 7,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -197,6 +197,7 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         .map(|url| RsRequest {
             url: url.clone(),
             permanent: true,
+            mime: url.split('.').last().map(|ext| format!("image/{}", ext)),
             instant: Some(true),
             ..Default::default()
         })

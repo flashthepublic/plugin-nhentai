@@ -1,8 +1,8 @@
 use extism::*;
-use rs_plugin_common_interfaces::lookup::{
+use rs_plugin_common_interfaces::{domain::rs_ids::RsIds, lookup::{
     RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
     RsLookupSourceResult, RsLookupWrapper,
-};
+}};
 
 fn build_plugin() -> Plugin {
     let wasm = Wasm::file("target/wasm32-unknown-unknown/release/rs_plugin_nh.wasm");
@@ -225,8 +225,11 @@ fn test_lookup_571095_returns_group_download() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
-            name: Some("nhentai:571095".to_string()),
-            ids: None,
+            name: Some("test".to_string()),
+            ids: Some(RsIds {
+                other_ids: Some(vec!["nhentai:571095".to_string()].into()),
+                ..Default::default()
+            }),
         }),
         credential: None,
         params: None,
