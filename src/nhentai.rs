@@ -26,6 +26,7 @@ pub struct NhentaiGallery {
     pub tag_ids: Vec<String>,
     pub people_details: Vec<NhentaiRelation>,
     pub tag_details: Vec<NhentaiRelation>,
+    pub parody_details: Vec<NhentaiRelation>,
 }
 
 pub fn build_search_url(search: &str) -> Option<String> {
@@ -173,6 +174,7 @@ pub fn parse_gallery_html(html: &str, gallery_id: &str) -> Option<NhentaiGallery
         tag_ids: tag_buckets.tag_ids,
         people_details: tag_buckets.people_details,
         tag_details: tag_buckets.tag_details,
+        parody_details: tag_buckets.parody_details,
     })
 }
 
@@ -219,6 +221,7 @@ struct TagBuckets {
     tag_ids: Vec<String>,
     people_details: Vec<NhentaiRelation>,
     tag_details: Vec<NhentaiRelation>,
+    parody_details: Vec<NhentaiRelation>,
 }
 
 fn parse_gallery_title(document: &Html) -> String {
@@ -359,8 +362,7 @@ fn parse_tag_buckets(document: &Html) -> TagBuckets {
 
         if label == "parodies" || label == "parody" {
             push_all_unique(&mut out.parodies, values);
-            push_all_unique(&mut out.tag_ids, relation_ids);
-            push_all_unique_relations(&mut out.tag_details, relation_details);
+            push_all_unique_relations(&mut out.parody_details, relation_details);
             continue;
         }
 

@@ -2,6 +2,7 @@ use rs_plugin_common_interfaces::{
     domain::{
         book::Book,
         external_images::{ExternalImage, ImageType},
+        media::FileEpisode,
         person::Person,
         tag::Tag,
         Relations,
@@ -18,6 +19,7 @@ pub fn nhentai_gallery_to_result(item: NhentaiGallery) -> RsLookupMetadataResult
     let language_code = default_language_code(&item.languages);
     let people_details = build_people_details(&item.people_details);
     let tag_details = build_tag_details(&item.tag_details);
+    let series = build_series(&item.parody_details);
 
     let id = item
         .id
@@ -64,6 +66,11 @@ pub fn nhentai_gallery_to_result(item: NhentaiGallery) -> RsLookupMetadataResult
                 None
             } else {
                 Some(tag_details)
+            },
+            series: if series.is_empty() {
+                None
+            } else {
+                Some(series)
             },
             ..Default::default()
         }),
@@ -144,6 +151,23 @@ fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
             generated: true,
             otherids: Some(vec![value.id.clone()].into()),
             path: "/".to_string(),
+        })
+        .collect()
+}
+
+fn build_series(values: &[NhentaiRelation]) -> Vec<FileEpisode> {
+    values
+        .iter()
+        .filter(|value| {
+            !value.id.trim().is_empty()
+                && !value.name.trim().is_empty()
+                && value.name.to_ascii_lowercase() != "original"
+        })
+        .map(|value| FileEpisode {
+            id: value.id.clone(),
+            season: None,
+            episode: None,
+            episode_to: None,
         })
         .collect()
 }
