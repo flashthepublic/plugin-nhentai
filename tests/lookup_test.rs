@@ -10,6 +10,14 @@ fn build_plugin() -> Plugin {
     Plugin::new(&manifest, [], true).expect("Failed to create plugin")
 }
 
+fn call_lookup_source(plugin: &mut Plugin, input: &RsLookupWrapper) -> RsLookupSourceResult {
+    let input_str = serde_json::to_string(input).unwrap();
+    let output = plugin
+        .call::<&str, &[u8]>("lookup", &input_str)
+        .expect("lookup call failed");
+    serde_json::from_slice(output).expect("Failed to parse lookup source result")
+}
+
 fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> Vec<RsLookupMetadataResultWrapper> {
     let input_str = serde_json::to_string(input).unwrap();
     let output = plugin
@@ -257,4 +265,96 @@ fn test_lookup_571095_returns_group_download() {
         }
         other => panic!("Expected GroupRequest, got {:?}", other),
     }
+}
+
+#[test]
+fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
+    let mut plugin = build_plugin();
+
+    // nhentai:999999999 should not exist; the name "cheating" should produce search results.
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: Some(RsIds {
+                other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
+                ..Default::default()
+            }),
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.is_empty(),
+        "Expected search fallback to return results when direct ID is unknown"
+    );
+    let book = match &results[0].metadata {
+        RsLookupMetadataResult::Book(book) => book,
+        _ => panic!("Expected book metadata"),
+    };
+    assert!(
+        !book.name.trim().is_empty(),
+        "Expected a non-empty book name from fallback search"
+    );
+}
+
+#[test]
+fn test_lookup_returns_group_for_name_only_search() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let result = call_lookup_source(&mut plugin, &input);
+    let RsLookupSourceResult::GroupRequest(groups) = result else {
+        panic!("Expected GroupRequest for name-only search");
+    };
+    assert!(
+        !groups.is_empty(),
+        "Expected at least one group from name search"
+    );
+    assert!(
+        groups.iter().all(|g| g.group),
+        "Expected all results to have group flag set"
+    );
+    println!("Name-only search returned {} groups", groups.len());
+}
+
+#[test]
+fn test_lookup_falls_back_to_name_search_on_unknown_id() {
+    let mut plugin = build_plugin();
+
+    // nhentai:999999999 should not exist; the name "cheating" should produce search results.
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: Some(RsIds {
+                other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
+                ..Default::default()
+            }),
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let result = call_lookup_source(&mut plugin, &input);
+    let RsLookupSourceResult::GroupRequest(groups) = result else {
+        panic!("Expected GroupRequest from name fallback after unknown ID");
+    };
+    assert!(
+        !groups.is_empty(),
+        "Expected search fallback to produce groups"
+    );
+    println!(
+        "Fallback search returned {} groups, first has {} requests",
+        groups.len(),
+        groups[0].requests.len()
+    );
 }

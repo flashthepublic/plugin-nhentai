@@ -103,7 +103,17 @@ fn lookup_galleries(lookup: &RsLookupWrapper) -> FnResult<Vec<NhentaiGallery>> {
     };
 
     match resolve_book_lookup_target(book) {
-        Some(LookupTarget::DirectGallery(gallery_id)) => execute_gallery_request(&gallery_id),
+        Some(LookupTarget::DirectGallery(gallery_id)) => {
+            let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
+            if !galleries.is_empty() {
+                return Ok(galleries);
+            }
+            // Gallery lookup returned nothing; fall back to name search if available.
+            match book.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(name) => execute_search_request(name),
+                None => Ok(vec![]),
+            }
+        }
         Some(LookupTarget::Search(search)) => execute_search_request(search),
         _ => Err(WithReturnCode::new(
             extism_pdk::Error::msg("Not supported"),
@@ -178,19 +188,30 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
     };
 
-    let gallery_id = match resolve_book_lookup_target(book) {
-        Some(LookupTarget::DirectGallery(id)) => id,
-        _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
-    };
-
-    let galleries = execute_gallery_request(&gallery_id)?;
-
-    if galleries.is_empty() {
-        return Ok(Json(RsLookupSourceResult::NotFound));
+    match resolve_book_lookup_target(book) {
+        Some(LookupTarget::DirectGallery(gallery_id)) => {
+            let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
+            if !galleries.is_empty() {
+                return Ok(Json(galleries_to_group_result(galleries)));
+            }
+            // Fall back to name search if the gallery returned nothing.
+            match book.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(name) => {
+                    let galleries = execute_search_request(name)?;
+                    Ok(Json(galleries_to_group_result(galleries)))
+                }
+                None => Ok(Json(RsLookupSourceResult::NotFound)),
+            }
+        }
+        Some(LookupTarget::Search(search)) => {
+            let galleries = execute_search_request(search)?;
+            Ok(Json(galleries_to_group_result(galleries)))
+        }
+        _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
     }
+}
 
-    let gallery = &galleries[0];
-
+fn gallery_to_group_download(gallery: NhentaiGallery) -> RsGroupDownload {
     let requests: Vec<RsRequest> = gallery
         .images
         .iter()
@@ -203,7 +224,7 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         })
         .collect();
 
-    let group_download = RsGroupDownload {
+    RsGroupDownload {
         group: true,
         group_thumbnail_url: if gallery.cover_url.is_empty() {
             None
@@ -212,9 +233,15 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         },
         requests,
         ..Default::default()
-    };
+    }
+}
 
-    Ok(Json(RsLookupSourceResult::GroupRequest(vec![group_download])))
+fn galleries_to_group_result(galleries: Vec<NhentaiGallery>) -> RsLookupSourceResult {
+    if galleries.is_empty() {
+        return RsLookupSourceResult::NotFound;
+    }
+    let group_downloads = galleries.into_iter().map(gallery_to_group_download).collect();
+    RsLookupSourceResult::GroupRequest(group_downloads)
 }
 
 fn deduplicate_images(images: Vec<ExternalImage>) -> Vec<ExternalImage> {
@@ -291,6 +318,81 @@ mod tests {
             Some(LookupTarget::DirectGallery(id)) => assert_eq!(id, "67890"),
             _ => panic!("Expected direct gallery target from ids"),
         }
+    }
+
+    #[test]
+    fn galleries_to_group_result_empty_returns_not_found() {
+        let result = galleries_to_group_result(vec![]);
+        assert!(matches!(result, RsLookupSourceResult::NotFound));
+    }
+
+    #[test]
+    fn galleries_to_group_result_maps_each_gallery() {
+        let galleries = vec![
+            NhentaiGallery {
+                id: Some("1".to_string()),
+                title: "Gallery One".to_string(),
+                cover_url: "https://t.nhentai.net/galleries/1/cover.jpg".to_string(),
+                images: vec![
+                    "https://i.nhentai.net/galleries/1/1.jpg".to_string(),
+                    "https://i.nhentai.net/galleries/1/2.jpg".to_string(),
+                ],
+                ..Default::default()
+            },
+            NhentaiGallery {
+                id: Some("2".to_string()),
+                title: "Gallery Two".to_string(),
+                cover_url: "https://t.nhentai.net/galleries/2/cover.jpg".to_string(),
+                images: vec!["https://i.nhentai.net/galleries/2/1.png".to_string()],
+                ..Default::default()
+            },
+        ];
+
+        let result = galleries_to_group_result(galleries);
+        let RsLookupSourceResult::GroupRequest(downloads) = result else {
+            panic!("Expected GroupRequest");
+        };
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(downloads[0].requests.len(), 2);
+        assert_eq!(
+            downloads[0].group_thumbnail_url,
+            Some("https://t.nhentai.net/galleries/1/cover.jpg".to_string())
+        );
+        assert_eq!(downloads[1].requests.len(), 1);
+        assert_eq!(
+            downloads[1].requests[0].mime,
+            Some("image/png".to_string())
+        );
+    }
+
+    #[test]
+    fn gallery_to_group_download_sets_mime_from_extension() {
+        let gallery = NhentaiGallery {
+            cover_url: "https://t.nhentai.net/galleries/5/cover.jpg".to_string(),
+            images: vec![
+                "https://i.nhentai.net/galleries/5/1.jpg".to_string(),
+                "https://i.nhentai.net/galleries/5/2.webp".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let download = gallery_to_group_download(gallery);
+        assert_eq!(download.requests[0].mime, Some("image/jpg".to_string()));
+        assert_eq!(download.requests[1].mime, Some("image/webp".to_string()));
+        assert!(download.requests[0].permanent);
+        assert_eq!(download.requests[0].instant, Some(true));
+    }
+
+    #[test]
+    fn gallery_to_group_download_empty_cover_sets_no_thumbnail() {
+        let gallery = NhentaiGallery {
+            cover_url: String::new(),
+            images: vec!["https://i.nhentai.net/galleries/6/1.jpg".to_string()],
+            ..Default::default()
+        };
+
+        let download = gallery_to_group_download(gallery);
+        assert!(download.group_thumbnail_url.is_none());
     }
 
     #[test]
