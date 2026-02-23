@@ -3,7 +3,11 @@ use std::collections::HashSet;
 
 use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
-    lookup::{RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult, RsLookupWrapper},
+    domain::media::{FileEpisode, MediaForUpdate, MediaItemReference},
+    lookup::{
+        RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult,
+        RsLookupWrapper,
+    },
     request::{RsGroupDownload, RsRequest},
     PluginInformation, PluginType,
 };
@@ -27,7 +31,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 8,
+        version: 9,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -109,7 +113,12 @@ fn lookup_galleries(lookup: &RsLookupWrapper) -> FnResult<Vec<NhentaiGallery>> {
                 return Ok(galleries);
             }
             // Gallery lookup returned nothing; fall back to name search if available.
-            match book.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            match book
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+            {
                 Some(name) => execute_search_request(name),
                 None => Ok(vec![]),
             }
@@ -195,7 +204,12 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
                 return Ok(Json(galleries_to_group_result(galleries)));
             }
             // Fall back to name search if the gallery returned nothing.
-            match book.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            match book
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+            {
                 Some(name) => {
                     let galleries = execute_search_request(name)?;
                     Ok(Json(galleries_to_group_result(galleries)))
@@ -224,6 +238,8 @@ fn gallery_to_group_download(gallery: NhentaiGallery) -> RsGroupDownload {
         })
         .collect();
 
+    let infos = gallery_to_infos(&gallery);
+
     RsGroupDownload {
         group: true,
         group_thumbnail_url: if gallery.cover_url.is_empty() {
@@ -232,15 +248,150 @@ fn gallery_to_group_download(gallery: NhentaiGallery) -> RsGroupDownload {
             Some(gallery.cover_url.clone())
         },
         requests,
+        infos,
         ..Default::default()
     }
+}
+
+fn gallery_to_infos(gallery: &NhentaiGallery) -> Option<MediaForUpdate> {
+    let add_people = relation_details_to_media_refs(&gallery.people_details);
+    let add_tags = relation_details_to_media_refs(&gallery.tag_details);
+    let add_series = relation_details_to_series_refs(&gallery.parody_details);
+
+    let people_lookup = relation_details_to_lookup_names(&gallery.people_details);
+    let tags_lookup = relation_details_to_lookup_names(&gallery.tag_details);
+    let series_lookup = relation_details_to_series_lookup_names(&gallery.parody_details);
+
+    if add_people.is_empty()
+        && add_tags.is_empty()
+        && add_series.is_empty()
+        && people_lookup.is_empty()
+        && tags_lookup.is_empty()
+        && series_lookup.is_empty()
+    {
+        return None;
+    }
+
+    Some(MediaForUpdate {
+        add_people: if add_people.is_empty() {
+            None
+        } else {
+            Some(add_people)
+        },
+        add_tags: if add_tags.is_empty() {
+            None
+        } else {
+            Some(add_tags)
+        },
+        add_series: if add_series.is_empty() {
+            None
+        } else {
+            Some(add_series)
+        },
+        people_lookup: if people_lookup.is_empty() {
+            None
+        } else {
+            Some(people_lookup)
+        },
+        tags_lookup: if tags_lookup.is_empty() {
+            None
+        } else {
+            Some(tags_lookup)
+        },
+        series_lookup: if series_lookup.is_empty() {
+            None
+        } else {
+            Some(series_lookup)
+        },
+        ..Default::default()
+    })
+}
+
+fn relation_details_to_media_refs(values: &[nhentai::NhentaiRelation]) -> Vec<MediaItemReference> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .filter_map(|value| {
+            let id = value.id.trim();
+            let name = value.name.trim();
+            if id.is_empty() || name.is_empty() || !seen.insert(id.to_string()) {
+                None
+            } else {
+                Some(MediaItemReference {
+                    id: id.to_string(),
+                    conf: None,
+                })
+            }
+        })
+        .collect()
+}
+
+fn relation_details_to_series_refs(values: &[nhentai::NhentaiRelation]) -> Vec<FileEpisode> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .filter_map(|value| {
+            let id = value.id.trim();
+            let name = value.name.trim();
+            if id.is_empty()
+                || name.is_empty()
+                || name.eq_ignore_ascii_case("original")
+                || !seen.insert(id.to_string())
+            {
+                None
+            } else {
+                Some(FileEpisode {
+                    id: id.to_string(),
+                    season: None,
+                    episode: None,
+                    episode_to: None,
+                })
+            }
+        })
+        .collect()
+}
+
+fn relation_details_to_lookup_names(values: &[nhentai::NhentaiRelation]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .filter_map(|value| {
+            let name = value.name.trim();
+            if name.is_empty() || !seen.insert(name.to_string()) {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
+}
+
+fn relation_details_to_series_lookup_names(values: &[nhentai::NhentaiRelation]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .iter()
+        .filter_map(|value| {
+            let name = value.name.trim();
+            if name.is_empty()
+                || name.eq_ignore_ascii_case("original")
+                || !seen.insert(name.to_string())
+            {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
 }
 
 fn galleries_to_group_result(galleries: Vec<NhentaiGallery>) -> RsLookupSourceResult {
     if galleries.is_empty() {
         return RsLookupSourceResult::NotFound;
     }
-    let group_downloads = galleries.into_iter().map(gallery_to_group_download).collect();
+    let group_downloads = galleries
+        .into_iter()
+        .map(gallery_to_group_download)
+        .collect();
     RsLookupSourceResult::GroupRequest(group_downloads)
 }
 
@@ -359,10 +510,7 @@ mod tests {
             Some("https://t.nhentai.net/galleries/1/cover.jpg".to_string())
         );
         assert_eq!(downloads[1].requests.len(), 1);
-        assert_eq!(
-            downloads[1].requests[0].mime,
-            Some("image/png".to_string())
-        );
+        assert_eq!(downloads[1].requests[0].mime, Some("image/png".to_string()));
     }
 
     #[test]
@@ -393,6 +541,59 @@ mod tests {
 
         let download = gallery_to_group_download(gallery);
         assert!(download.group_thumbnail_url.is_none());
+    }
+
+    #[test]
+    fn gallery_to_group_download_sets_infos_from_relation_details() {
+        let gallery = NhentaiGallery {
+            images: vec!["https://i.nhentai.net/galleries/7/1.jpg".to_string()],
+            people_details: vec![nhentai::NhentaiRelation {
+                id: "nhentai-artist:bai-asuka".to_string(),
+                name: "bai asuka".to_string(),
+            }],
+            tag_details: vec![nhentai::NhentaiRelation {
+                id: "nhentai-tags:full-color".to_string(),
+                name: "full color".to_string(),
+            }],
+            parody_details: vec![
+                nhentai::NhentaiRelation {
+                    id: "nhentai-parody:naruto".to_string(),
+                    name: "naruto".to_string(),
+                },
+                nhentai::NhentaiRelation {
+                    id: "nhentai-parody:original".to_string(),
+                    name: "original".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let download = gallery_to_group_download(gallery);
+        let infos = download.infos.expect("expected infos to be set");
+        assert_eq!(
+            infos.add_people.expect("expected add_people")[0].id,
+            "nhentai-artist:bai-asuka"
+        );
+        assert_eq!(
+            infos.add_tags.expect("expected add_tags")[0].id,
+            "nhentai-tags:full-color"
+        );
+        assert_eq!(
+            infos.add_series.expect("expected add_series")[0].id,
+            "nhentai-parody:naruto"
+        );
+        assert_eq!(
+            infos.people_lookup.expect("expected people_lookup")[0],
+            "bai asuka"
+        );
+        assert_eq!(
+            infos.tags_lookup.expect("expected tags_lookup")[0],
+            "full color"
+        );
+        assert_eq!(
+            infos.series_lookup.expect("expected series_lookup")[0],
+            "naruto"
+        );
     }
 
     #[test]

@@ -1,8 +1,11 @@
 use extism::*;
-use rs_plugin_common_interfaces::{domain::rs_ids::RsIds, lookup::{
-    RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
-    RsLookupSourceResult, RsLookupWrapper,
-}};
+use rs_plugin_common_interfaces::{
+    domain::rs_ids::RsIds,
+    lookup::{
+        RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
+        RsLookupSourceResult, RsLookupWrapper,
+    },
+};
 
 fn build_plugin() -> Plugin {
     let wasm = Wasm::file("target/wasm32-unknown-unknown/release/rs_plugin_nh.wasm");
@@ -159,7 +162,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .unwrap_or(false),
         "Expected at least one image in direct-id lookup result"
     );
-/*
+    /*
     println!(
         "Direct ID lookup result: tags {:?}",
         first
@@ -175,7 +178,6 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .and_then(|relations| relations.people_details.as_ref())
     );*/
 }
-
 
 #[test]
 fn test_lookup_direct_id_624988_parodies_returned() {
@@ -247,7 +249,8 @@ fn test_lookup_571095_returns_group_download() {
     let output = plugin
         .call::<&str, &[u8]>("lookup", &input_str)
         .expect("lookup call failed");
-    let result: RsLookupSourceResult = serde_json::from_slice(output).expect("Failed to parse lookup output");
+    let result: RsLookupSourceResult =
+        serde_json::from_slice(output).expect("Failed to parse lookup output");
 
     match result {
         RsLookupSourceResult::GroupRequest(groups) => {
