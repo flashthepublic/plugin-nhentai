@@ -9,7 +9,7 @@ use rs_plugin_common_interfaces::{
         RsLookupWrapper,
     },
     request::{RsGroupDownload, RsRequest},
-    PluginInformation, PluginType,
+    CustomParam, CustomParamTypes, PluginInformation, PluginType,
 };
 
 mod convert;
@@ -37,7 +37,12 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
         publisher: "neckaros".into(),
         description: "Look up books metadata from nhentai.net".into(),
         credential_kind: None,
-        settings: vec![],
+        settings: vec![CustomParam {
+            name: "custom_search_params".into(),
+            param: CustomParamTypes::Text(None),
+            description: Some("Custom parameters appended to every search query".into()),
+            required: false,
+        }],
         ..Default::default()
     }))
 }
@@ -63,8 +68,9 @@ fn build_http_request(url: String) -> HttpRequest {
 fn execute_search_request(
     search: &str,
     page: Option<u32>,
+    custom_search_params: Option<&str>,
 ) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
-    let url = build_search_url(search, page)
+    let url = build_search_url(search, page, custom_search_params)
         .ok_or_else(|| WithReturnCode::new(extism_pdk::Error::msg("Not supported"), 404))?;
 
     let body = execute_html_request(url)?;
@@ -118,6 +124,12 @@ fn lookup_galleries(
         _ => return Ok((vec![], None)),
     };
 
+    let custom_search_params = lookup
+        .params
+        .as_ref()
+        .and_then(|p| p.get("custom_search_params"))
+        .map(|s| s.as_str());
+
     let page = book
         .page_key
         .as_deref()
@@ -136,11 +148,11 @@ fn lookup_galleries(
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
             {
-                Some(name) => execute_search_request(name, page),
+                Some(name) => execute_search_request(name, page, custom_search_params),
                 None => Ok((vec![], None)),
             }
         }
-        Some(LookupTarget::Search(search)) => execute_search_request(&search, page),
+        Some(LookupTarget::Search(search)) => execute_search_request(&search, page, custom_search_params),
         _ => Err(WithReturnCode::new(
             extism_pdk::Error::msg("Not supported"),
             404,
@@ -241,6 +253,12 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
     };
 
+    let custom_search_params = lookup
+        .params
+        .as_ref()
+        .and_then(|p| p.get("custom_search_params"))
+        .map(|s| s.as_str());
+
     match resolve_book_lookup_target(book) {
         Some(LookupTarget::DirectGallery(gallery_id)) => {
             let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
@@ -255,14 +273,14 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
                 .filter(|n| !n.is_empty())
             {
                 Some(name) => {
-                    let (galleries, _) = execute_search_request(name, None)?;
+                    let (galleries, _) = execute_search_request(name, None, custom_search_params)?;
                     Ok(Json(galleries_to_group_result(galleries)))
                 }
                 None => Ok(Json(RsLookupSourceResult::NotFound)),
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, _) = execute_search_request(&search, None)?;
+            let (galleries, _) = execute_search_request(&search, None, custom_search_params)?;
             Ok(Json(galleries_to_group_result(galleries)))
         }
         _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
