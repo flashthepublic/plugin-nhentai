@@ -62,6 +62,40 @@ pub fn build_gallery_url(gallery_id: &str) -> String {
     format!("https://nhentai.net/g/{gallery_id}/")
 }
 
+pub fn parse_relation_search_term(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let without_prefix = trimmed
+        .strip_prefix("nhentai-")
+        .or_else(|| {
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("nhentai-") {
+                Some(&trimmed["nhentai-".len()..])
+            } else {
+                None
+            }
+        })?;
+
+    let (category, slug) = without_prefix.split_once(':')?;
+    let slug = slug.trim();
+    if slug.is_empty() {
+        return None;
+    }
+
+    let category_lower = category.to_ascii_lowercase();
+    let search_category = match category_lower.as_str() {
+        "tags" => "tag",
+        "artist" => "artist",
+        "group" => "group",
+        "parody" => "parody",
+        "character" => "character",
+        "language" => "language",
+        "category" => "category",
+        _ => return None,
+    };
+
+    Some(format!("{search_category}:{slug}"))
+}
+
 pub fn parse_lookup_gallery_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1040,6 +1074,80 @@ mod tests {
                 name: "bai asuka".to_string()
             }]
         );
+    }
+
+    #[test]
+    fn parse_relation_search_term_group() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-group:maiju"),
+            Some("group:maiju".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_artist() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-artist:sasaki-musashi"),
+            Some("artist:sasaki-musashi".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_tags_maps_to_tag() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-tags:full-color"),
+            Some("tag:full-color".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_parody() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-parody:naruto"),
+            Some("parody:naruto".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_character() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-character:hinata"),
+            Some("character:hinata".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_language() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-language:english"),
+            Some("language:english".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_category() {
+        assert_eq!(
+            parse_relation_search_term("nhentai-category:doujinshi"),
+            Some("category:doujinshi".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_relation_search_term_invalid_category() {
+        assert_eq!(parse_relation_search_term("nhentai-unknown:value"), None);
+    }
+
+    #[test]
+    fn parse_relation_search_term_not_a_relation_id() {
+        assert_eq!(parse_relation_search_term("nhentai:12345"), None);
+        assert_eq!(parse_relation_search_term("some random text"), None);
+        assert_eq!(parse_relation_search_term(""), None);
+    }
+
+    #[test]
+    fn parse_relation_search_term_empty_slug() {
+        assert_eq!(parse_relation_search_term("nhentai-artist:"), None);
+        assert_eq!(parse_relation_search_term("nhentai-artist:  "), None);
     }
 
     #[test]

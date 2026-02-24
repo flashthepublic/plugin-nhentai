@@ -18,12 +18,12 @@ mod nhentai;
 use convert::{nhentai_gallery_to_images, nhentai_gallery_to_result};
 use nhentai::{
     build_gallery_url, build_search_url, parse_gallery_html, parse_lookup_gallery_id,
-    parse_search_html, parse_search_next_page, NhentaiGallery,
+    parse_relation_search_term, parse_search_html, parse_search_next_page, NhentaiGallery,
 };
 
-enum LookupTarget<'a> {
+enum LookupTarget {
     DirectGallery(String),
-    Search(&'a str),
+    Search(String),
 }
 
 #[plugin_fn]
@@ -140,7 +140,7 @@ fn lookup_galleries(
                 None => Ok((vec![], None)),
             }
         }
-        Some(LookupTarget::Search(search)) => execute_search_request(search, page),
+        Some(LookupTarget::Search(search)) => execute_search_request(&search, page),
         _ => Err(WithReturnCode::new(
             extism_pdk::Error::msg("Not supported"),
             404,
@@ -148,7 +148,7 @@ fn lookup_galleries(
     }
 }
 
-fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget<'_>> {
+fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
     if let Some(id) = book.name.as_deref().and_then(parse_lookup_gallery_id) {
         return Some(LookupTarget::DirectGallery(id));
     }
@@ -172,11 +172,35 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget<'_>> {
         }
     }
 
+    // Check for relation IDs (e.g. "nhentai-group:maiju") and convert to search terms.
+    if let Some(term) = book.name.as_deref().and_then(parse_relation_search_term) {
+        return Some(LookupTarget::Search(term));
+    }
+
+    if let Some(ids) = book.ids.as_ref() {
+        if let Some(term) = ids.redseat.as_deref().and_then(parse_relation_search_term) {
+            return Some(LookupTarget::Search(term));
+        }
+
+        if let Some(term) = ids.slug.as_deref().and_then(parse_relation_search_term) {
+            return Some(LookupTarget::Search(term));
+        }
+
+        if let Some(term) = ids.other_ids.as_ref().and_then(|other_ids| {
+            other_ids
+                .as_slice()
+                .iter()
+                .find_map(|value| parse_relation_search_term(value))
+        }) {
+            return Some(LookupTarget::Search(term));
+        }
+    }
+
     book.name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(LookupTarget::Search)
+        .map(|value| LookupTarget::Search(value.to_string()))
 }
 
 #[plugin_fn]
@@ -238,7 +262,7 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, _) = execute_search_request(search, None)?;
+            let (galleries, _) = execute_search_request(&search, None)?;
             Ok(Json(galleries_to_group_result(galleries)))
         }
         _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
@@ -617,6 +641,72 @@ mod tests {
             infos.series_lookup.expect("expected series_lookup")[0],
             "naruto"
         );
+    }
+
+    #[test]
+    fn resolve_target_relation_id_in_name() {
+        let book = RsLookupBook {
+            name: Some("nhentai-group:maiju".to_string()),
+            ids: None,
+            page_key: None,
+        };
+
+        let target = resolve_book_lookup_target(&book);
+        match target {
+            Some(LookupTarget::Search(term)) => assert_eq!(term, "group:maiju"),
+            _ => panic!("Expected Search target for relation ID in name"),
+        }
+    }
+
+    #[test]
+    fn resolve_target_relation_id_in_other_ids() {
+        let book = RsLookupBook {
+            name: Some("some book name".to_string()),
+            ids: Some(RsIds {
+                other_ids: Some(vec!["nhentai-artist:sasaki-musashi".to_string()].into()),
+                ..Default::default()
+            }),
+            page_key: None,
+        };
+
+        let target = resolve_book_lookup_target(&book);
+        match target {
+            Some(LookupTarget::Search(term)) => assert_eq!(term, "artist:sasaki-musashi"),
+            _ => panic!("Expected Search target for relation ID in other_ids"),
+        }
+    }
+
+    #[test]
+    fn resolve_target_gallery_id_preferred_over_relation() {
+        let book = RsLookupBook {
+            name: Some("nhentai:12345".to_string()),
+            ids: Some(RsIds {
+                other_ids: Some(vec!["nhentai-artist:bai-asuka".to_string()].into()),
+                ..Default::default()
+            }),
+            page_key: None,
+        };
+
+        let target = resolve_book_lookup_target(&book);
+        match target {
+            Some(LookupTarget::DirectGallery(id)) => assert_eq!(id, "12345"),
+            _ => panic!("Expected DirectGallery to win over relation ID"),
+        }
+    }
+
+    #[test]
+    fn resolve_target_relation_id_in_name_tags_maps_to_tag() {
+        let book = RsLookupBook {
+            name: Some("nhentai-tags:full-color".to_string()),
+            ids: None,
+            page_key: None,
+        };
+
+        let target = resolve_book_lookup_target(&book);
+        match target {
+            Some(LookupTarget::Search(term)) => assert_eq!(term, "tag:full-color"),
+            _ => panic!("Expected Search target with tag: prefix"),
+        }
     }
 
     #[test]

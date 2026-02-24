@@ -402,6 +402,42 @@ fn test_lookup_metadata_search_returns_next_page_key() {
 }
 
 #[test]
+fn test_lookup_metadata_relation_id_artist_search() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("nhentai-artist:bai-asuka".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected at least one result for artist relation ID 'nhentai-artist:bai-asuka'"
+    );
+
+    let first = &results.results[0];
+    let book = match &first.metadata {
+        RsLookupMetadataResult::Book(book) => book,
+        _ => panic!("Expected book metadata"),
+    };
+    assert!(
+        !book.name.trim().is_empty(),
+        "Expected a non-empty book name from artist relation ID search"
+    );
+    println!(
+        "Relation ID artist search returned {} results, first: {}",
+        results.results.len(),
+        book.name
+    );
+}
+
+#[test]
 fn test_lookup_metadata_page_2_returns_different_results() {
     let mut plugin = build_plugin();
 
