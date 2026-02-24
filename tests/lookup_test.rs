@@ -2,8 +2,8 @@ use extism::*;
 use rs_plugin_common_interfaces::{
     domain::rs_ids::RsIds,
     lookup::{
-        RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResultWrapper, RsLookupQuery,
-        RsLookupSourceResult, RsLookupWrapper,
+        RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResults,
+        RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult, RsLookupWrapper,
     },
 };
 
@@ -21,7 +21,7 @@ fn call_lookup_source(plugin: &mut Plugin, input: &RsLookupWrapper) -> RsLookupS
     serde_json::from_slice(output).expect("Failed to parse lookup source result")
 }
 
-fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> Vec<RsLookupMetadataResultWrapper> {
+fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> RsLookupMetadataResults {
     let input_str = serde_json::to_string(input).unwrap();
     let output = plugin
         .call::<&str, &[u8]>("lookup_metadata", &input_str)
@@ -37,6 +37,7 @@ fn test_lookup_empty_name_returns_404() {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some(String::new()),
             ids: None,
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -62,6 +63,7 @@ fn test_lookup_exhibitionism_live_when_enabled() {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("cheating".to_string()),
             ids: None,
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -69,11 +71,11 @@ fn test_lookup_exhibitionism_live_when_enabled() {
 
     let results = call_lookup(&mut plugin, &input);
     assert!(
-        !results.is_empty(),
+        !results.results.is_empty(),
         "Expected at least one result for 'cheating'"
     );
 
-    let first = &results[0];
+    let first = &results.results[0];
     let book = match &first.metadata {
         RsLookupMetadataResult::Book(book) => book,
         _ => panic!("Expected book metadata"),
@@ -102,6 +104,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("nhentai:629637".to_string()),
             ids: None,
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -109,11 +112,11 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
 
     let results = call_lookup(&mut plugin, &input);
     assert!(
-        !results.is_empty(),
+        !results.results.is_empty(),
         "Expected at least one result for direct id nhentai:629637"
     );
 
-    let first = &results[0];
+    let first = &results.results[0];
     let book = match &first.metadata {
         RsLookupMetadataResult::Book(book) => book,
         _ => panic!("Expected book metadata"),
@@ -187,6 +190,7 @@ fn test_lookup_direct_id_624988_parodies_returned() {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("nhentai:624988".to_string()),
             ids: None,
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -194,11 +198,11 @@ fn test_lookup_direct_id_624988_parodies_returned() {
 
     let results = call_lookup(&mut plugin, &input);
     assert!(
-        !results.is_empty(),
+        !results.results.is_empty(),
         "Expected at least one result for direct id nhentai:624988"
     );
 
-    let first = &results[0];
+    let first = &results.results[0];
     let book = match &first.metadata {
         RsLookupMetadataResult::Book(book) => book,
         _ => panic!("Expected book metadata"),
@@ -240,6 +244,7 @@ fn test_lookup_571095_returns_group_download() {
                 other_ids: Some(vec!["nhentai:571095".to_string()].into()),
                 ..Default::default()
             }),
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -282,6 +287,7 @@ fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
                 other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
                 ..Default::default()
             }),
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -289,10 +295,10 @@ fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
 
     let results = call_lookup(&mut plugin, &input);
     assert!(
-        !results.is_empty(),
+        !results.results.is_empty(),
         "Expected search fallback to return results when direct ID is unknown"
     );
-    let book = match &results[0].metadata {
+    let book = match &results.results[0].metadata {
         RsLookupMetadataResult::Book(book) => book,
         _ => panic!("Expected book metadata"),
     };
@@ -310,6 +316,7 @@ fn test_lookup_returns_group_for_name_only_search() {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("cheating".to_string()),
             ids: None,
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -342,6 +349,7 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
                 other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
                 ..Default::default()
             }),
+            page_key: None,
         }),
         credential: None,
         params: None,
@@ -359,5 +367,86 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
         "Fallback search returned {} groups, first has {} requests",
         groups.len(),
         groups[0].requests.len()
+    );
+}
+
+#[test]
+fn test_lookup_metadata_search_returns_next_page_key() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected at least one result for 'cheating'"
+    );
+    assert_eq!(
+        results.next_page_key,
+        Some("2".to_string()),
+        "Expected next_page_key to be '2' for the first page of search results"
+    );
+    println!(
+        "Search returned {} results, next_page_key: {:?}",
+        results.results.len(),
+        results.next_page_key
+    );
+}
+
+#[test]
+fn test_lookup_metadata_page_2_returns_different_results() {
+    let mut plugin = build_plugin();
+
+    let page1_input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let page1 = call_lookup(&mut plugin, &page1_input);
+    assert!(!page1.results.is_empty(), "Expected page 1 results");
+
+    let page2_input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: Some("2".to_string()),
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let page2 = call_lookup(&mut plugin, &page2_input);
+    assert!(!page2.results.is_empty(), "Expected page 2 results");
+
+    // Extract first result IDs from each page to confirm they differ
+    let page1_first_id = match &page1.results[0].metadata {
+        RsLookupMetadataResult::Book(book) => book.id.clone(),
+        _ => panic!("Expected book metadata on page 1"),
+    };
+    let page2_first_id = match &page2.results[0].metadata {
+        RsLookupMetadataResult::Book(book) => book.id.clone(),
+        _ => panic!("Expected book metadata on page 2"),
+    };
+
+    assert_ne!(
+        page1_first_id, page2_first_id,
+        "Expected page 1 and page 2 to return different results"
+    );
+    println!(
+        "Page 1 first: {}, Page 2 first: {}, Page 2 next_page_key: {:?}",
+        page1_first_id, page2_first_id, page2.next_page_key
     );
 }

@@ -29,17 +29,33 @@ pub struct NhentaiGallery {
     pub parody_details: Vec<NhentaiRelation>,
 }
 
-pub fn build_search_url(search: &str) -> Option<String> {
+pub fn build_search_url(search: &str, page: Option<u32>) -> Option<String> {
     let trimmed = search.trim();
     if trimmed.is_empty() {
         return None;
     }
 
     let query = format!("language:english {trimmed}");
-    Some(format!(
+    let mut url = format!(
         "https://nhentai.net/search/?q={}",
         encode_query_component(&query)
-    ))
+    );
+    if let Some(p) = page {
+        if p > 1 {
+            url.push_str(&format!("&page={p}"));
+        }
+    }
+    Some(url)
+}
+
+pub fn parse_search_next_page(html: &str, current_page: u32) -> Option<u32> {
+    let document = Html::parse_document(html);
+    let next_selector = Selector::parse("a.next").ok()?;
+    if document.select(&next_selector).next().is_some() {
+        Some(current_page + 1)
+    } else {
+        None
+    }
 }
 
 pub fn build_gallery_url(gallery_id: &str) -> String {
@@ -724,7 +740,22 @@ mod tests {
 
     #[test]
     fn build_search_url_adds_english_prefix() {
-        let url = build_search_url("soft").expect("url");
+        let url = build_search_url("soft", None).expect("url");
+        assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
+    }
+
+    #[test]
+    fn build_search_url_appends_page() {
+        let url = build_search_url("soft", Some(3)).expect("url");
+        assert_eq!(
+            url,
+            "https://nhentai.net/search/?q=language%3Aenglish+soft&page=3"
+        );
+    }
+
+    #[test]
+    fn build_search_url_page_one_omits_param() {
+        let url = build_search_url("soft", Some(1)).expect("url");
         assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
     }
 

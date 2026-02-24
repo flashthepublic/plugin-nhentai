@@ -5,7 +5,7 @@ use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
     domain::media::{FileEpisode, MediaForUpdate, MediaItemReference},
     lookup::{
-        RsLookupBook, RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult,
+        RsLookupBook, RsLookupMetadataResults, RsLookupQuery, RsLookupSourceResult,
         RsLookupWrapper,
     },
     request::{RsGroupDownload, RsRequest},
@@ -18,7 +18,7 @@ mod nhentai;
 use convert::{nhentai_gallery_to_images, nhentai_gallery_to_result};
 use nhentai::{
     build_gallery_url, build_search_url, parse_gallery_html, parse_lookup_gallery_id,
-    parse_search_html, NhentaiGallery,
+    parse_search_html, parse_search_next_page, NhentaiGallery,
 };
 
 enum LookupTarget<'a> {
@@ -60,12 +60,22 @@ fn build_http_request(url: String) -> HttpRequest {
     request
 }
 
-fn execute_search_request(search: &str) -> FnResult<Vec<NhentaiGallery>> {
-    let url = build_search_url(search)
+fn execute_search_request(
+    search: &str,
+    page: Option<u32>,
+) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
+    let url = build_search_url(search, page)
         .ok_or_else(|| WithReturnCode::new(extism_pdk::Error::msg("Not supported"), 404))?;
 
     let body = execute_html_request(url)?;
-    Ok(parse_search_html(&body))
+    let galleries = parse_search_html(&body);
+    let current_page = page.unwrap_or(1);
+    let next_page_key = if galleries.is_empty() {
+        None
+    } else {
+        parse_search_next_page(&body, current_page).map(|p| p.to_string())
+    };
+    Ok((galleries, next_page_key))
 }
 
 fn execute_gallery_request(gallery_id: &str) -> FnResult<Vec<NhentaiGallery>> {
@@ -100,17 +110,24 @@ fn execute_html_request(url: String) -> FnResult<String> {
     }
 }
 
-fn lookup_galleries(lookup: &RsLookupWrapper) -> FnResult<Vec<NhentaiGallery>> {
+fn lookup_galleries(
+    lookup: &RsLookupWrapper,
+) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
     let book = match &lookup.query {
         RsLookupQuery::Book(book) => book,
-        _ => return Ok(vec![]),
+        _ => return Ok((vec![], None)),
     };
+
+    let page = book
+        .page_key
+        .as_deref()
+        .and_then(|k| k.parse::<u32>().ok());
 
     match resolve_book_lookup_target(book) {
         Some(LookupTarget::DirectGallery(gallery_id)) => {
             let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
             if !galleries.is_empty() {
-                return Ok(galleries);
+                return Ok((galleries, None));
             }
             // Gallery lookup returned nothing; fall back to name search if available.
             match book
@@ -119,11 +136,11 @@ fn lookup_galleries(lookup: &RsLookupWrapper) -> FnResult<Vec<NhentaiGallery>> {
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
             {
-                Some(name) => execute_search_request(name),
-                None => Ok(vec![]),
+                Some(name) => execute_search_request(name, page),
+                None => Ok((vec![], None)),
             }
         }
-        Some(LookupTarget::Search(search)) => execute_search_request(search),
+        Some(LookupTarget::Search(search)) => execute_search_request(search, page),
         _ => Err(WithReturnCode::new(
             extism_pdk::Error::msg("Not supported"),
             404,
@@ -165,22 +182,25 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget<'_>> {
 #[plugin_fn]
 pub fn lookup_metadata(
     Json(lookup): Json<RsLookupWrapper>,
-) -> FnResult<Json<Vec<RsLookupMetadataResultWrapper>>> {
-    let galleries = lookup_galleries(&lookup)?;
+) -> FnResult<Json<RsLookupMetadataResults>> {
+    let (galleries, next_page_key) = lookup_galleries(&lookup)?;
 
     let results = galleries
         .into_iter()
         .map(nhentai_gallery_to_result)
         .collect();
 
-    Ok(Json(results))
+    Ok(Json(RsLookupMetadataResults {
+        results,
+        next_page_key,
+    }))
 }
 
 #[plugin_fn]
 pub fn lookup_metadata_images(
     Json(lookup): Json<RsLookupWrapper>,
 ) -> FnResult<Json<Vec<ExternalImage>>> {
-    let galleries = lookup_galleries(&lookup)?;
+    let (galleries, _) = lookup_galleries(&lookup)?;
 
     let images: Vec<ExternalImage> = galleries
         .iter()
@@ -211,14 +231,14 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
                 .filter(|n| !n.is_empty())
             {
                 Some(name) => {
-                    let galleries = execute_search_request(name)?;
+                    let (galleries, _) = execute_search_request(name, None)?;
                     Ok(Json(galleries_to_group_result(galleries)))
                 }
                 None => Ok(Json(RsLookupSourceResult::NotFound)),
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let galleries = execute_search_request(search)?;
+            let (galleries, _) = execute_search_request(search, None)?;
             Ok(Json(galleries_to_group_result(galleries)))
         }
         _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
@@ -421,8 +441,8 @@ mod tests {
             params: None,
         };
 
-        let result = lookup_galleries(&lookup).expect("lookup should succeed");
-        assert!(result.is_empty());
+        let (galleries, _) = lookup_galleries(&lookup).expect("lookup should succeed");
+        assert!(galleries.is_empty());
     }
 
     #[test]
@@ -431,6 +451,7 @@ mod tests {
             query: RsLookupQuery::Book(RsLookupBook {
                 name: Some(String::new()),
                 ids: None,
+                page_key: None,
             }),
             credential: None,
             params: None,
@@ -445,6 +466,7 @@ mod tests {
         let book = RsLookupBook {
             name: Some("nhentai:12345".to_string()),
             ids: None,
+            page_key: None,
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -462,6 +484,7 @@ mod tests {
                 other_ids: Some(vec!["nhentai:67890".to_string()].into()),
                 ..Default::default()
             }),
+            page_key: None,
         };
 
         let target = resolve_book_lookup_target(&book);

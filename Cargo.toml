@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 extism-pdk = "1.4.1"
-rs-plugin-common-interfaces = "0.30.3"
+rs-plugin-common-interfaces = "0.31.1"
 scraper = "0.24"
 serde_json = "1"
 regex = "1"
