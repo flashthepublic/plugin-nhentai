@@ -31,7 +31,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 11,
+        version: 12,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -128,7 +128,10 @@ fn lookup_galleries(
         .params
         .as_ref()
         .and_then(|p| p.get("custom_search_params"))
-        .map(|s| s.as_str());
+        .and_then(|s| match s {
+            CustomParamTypes::Text(v) => v.as_deref(),
+            _ => None,
+        });
 
     let page = book
         .page_key
@@ -257,7 +260,10 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         .params
         .as_ref()
         .and_then(|p| p.get("custom_search_params"))
-        .map(|s| s.as_str());
+        .and_then(|s| match s {
+            CustomParamTypes::Text(v) => v.as_deref(),
+            _ => None,
+        });
 
     match resolve_book_lookup_target(book) {
         Some(LookupTarget::DirectGallery(gallery_id)) => {

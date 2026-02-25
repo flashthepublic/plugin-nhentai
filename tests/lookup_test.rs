@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use extism::*;
 use rs_plugin_common_interfaces::{
     domain::rs_ids::RsIds,
@@ -484,5 +486,65 @@ fn test_lookup_metadata_page_2_returns_different_results() {
     println!(
         "Page 1 first: {}, Page 2 first: {}, Page 2 next_page_key: {:?}",
         page1_first_id, page2_first_id, page2.next_page_key
+    );
+}
+
+#[test]
+fn test_lookup_metadata_with_custom_search_params() {
+    let mut plugin = build_plugin();
+
+    // Search without custom params
+    let input_without = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results_without = call_lookup(&mut plugin, &input_without);
+    assert!(
+        !results_without.results.is_empty(),
+        "Expected results without custom params"
+    );
+
+    // Search with custom params that narrow results
+    let mut params = HashMap::new();
+    params.insert(
+        "custom_search_params".to_string(),
+        "-netorare".to_string(),
+    );
+
+    let input_with = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: Some(params),
+    };
+
+    let results_with = call_lookup(&mut plugin, &input_with);
+    assert!(
+        !results_with.results.is_empty(),
+        "Expected results with custom params"
+    );
+
+    // The results should differ since we excluded a tag
+    let id_without = match &results_without.results[0].metadata {
+        RsLookupMetadataResult::Book(book) => book.id.clone(),
+        _ => panic!("Expected book metadata"),
+    };
+    let id_with = match &results_with.results[0].metadata {
+        RsLookupMetadataResult::Book(book) => book.id.clone(),
+        _ => panic!("Expected book metadata"),
+    };
+
+    println!(
+        "Without custom params first: {}, With custom params first: {}",
+        id_without, id_with
     );
 }
