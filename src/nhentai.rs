@@ -132,7 +132,7 @@ pub fn parse_search_html(html: &str) -> Vec<NhentaiGallery> {
         let title = gallery
             .select(&caption_selector)
             .next()
-            .map(|el| normalize_text(&el.text().collect::<String>()))
+            .map(|el| clean_title(&el.text().collect::<String>()))
             .unwrap_or_default();
 
         if title.is_empty() {
@@ -293,9 +293,9 @@ fn parse_gallery_title(document: &Html) -> String {
                 node.text().collect::<String>()
             };
             let value = value.trim_end_matches(" - nhentai");
-            let normalized = normalize_text(value);
-            if !normalized.is_empty() {
-                return normalized;
+            let cleaned = clean_title(value);
+            if !cleaned.is_empty() {
+                return cleaned;
             }
         }
     }
@@ -736,6 +736,25 @@ fn is_valid_gallery_id(id: &str) -> bool {
 
 fn normalize_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clean_title(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut paren_depth = 0u32;
+    let mut bracket_depth = 0u32;
+
+    for ch in value.chars() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' if paren_depth > 0 => paren_depth -= 1,
+            '[' => bracket_depth += 1,
+            ']' if bracket_depth > 0 => bracket_depth -= 1,
+            _ if paren_depth == 0 && bracket_depth == 0 => result.push(ch),
+            _ => {}
+        }
+    }
+
+    normalize_text(&result)
 }
 
 fn normalize_url(value: &str) -> String {
