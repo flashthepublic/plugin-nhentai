@@ -7,6 +7,7 @@ use rs_plugin_common_interfaces::{
         RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResults,
         RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult, RsLookupWrapper,
     },
+    CustomParamTypes,
 };
 
 fn build_plugin() -> Plugin {
@@ -514,7 +515,7 @@ fn test_lookup_metadata_with_custom_search_params() {
     let mut params = HashMap::new();
     params.insert(
         "custom_search_params".to_string(),
-        "-netorare".to_string(),
+        CustomParamTypes::Text(Some("-netorare".to_string())),
     );
 
     let input_with = RsLookupWrapper {

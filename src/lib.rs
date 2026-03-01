@@ -5,8 +5,8 @@ use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
     domain::media::{FileEpisode, MediaForUpdate, MediaItemReference},
     lookup::{
-        RsLookupBook, RsLookupMetadataResults, RsLookupQuery, RsLookupSourceResult,
-        RsLookupWrapper,
+        RsLookupBook, RsLookupMatchType, RsLookupMetadataResults, RsLookupQuery,
+        RsLookupSourceResult, RsLookupWrapper,
     },
     request::{RsGroupDownload, RsRequest},
     CustomParam, CustomParamTypes, PluginInformation, PluginType,
@@ -31,7 +31,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 12,
+        version: 13,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -118,10 +118,10 @@ fn execute_html_request(url: String) -> FnResult<String> {
 
 fn lookup_galleries(
     lookup: &RsLookupWrapper,
-) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
+) -> FnResult<(Vec<NhentaiGallery>, Option<String>, Option<RsLookupMatchType>)> {
     let book = match &lookup.query {
         RsLookupQuery::Book(book) => book,
-        _ => return Ok((vec![], None)),
+        _ => return Ok((vec![], None, None)),
     };
 
     let custom_search_params = lookup
@@ -142,7 +142,7 @@ fn lookup_galleries(
         Some(LookupTarget::DirectGallery(gallery_id)) => {
             let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
             if !galleries.is_empty() {
-                return Ok((galleries, None));
+                return Ok((galleries, None, Some(RsLookupMatchType::ExactId)));
             }
             // Gallery lookup returned nothing; fall back to name search if available.
             match book
@@ -151,11 +151,19 @@ fn lookup_galleries(
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
             {
-                Some(name) => execute_search_request(name, page, custom_search_params),
-                None => Ok((vec![], None)),
+                Some(name) => {
+                    let (galleries, next_page_key) =
+                        execute_search_request(name, page, custom_search_params)?;
+                    Ok((galleries, next_page_key, None))
+                }
+                None => Ok((vec![], None, None)),
             }
         }
-        Some(LookupTarget::Search(search)) => execute_search_request(&search, page, custom_search_params),
+        Some(LookupTarget::Search(search)) => {
+            let (galleries, next_page_key) =
+                execute_search_request(&search, page, custom_search_params)?;
+            Ok((galleries, next_page_key, None))
+        }
         _ => Err(WithReturnCode::new(
             extism_pdk::Error::msg("Not supported"),
             404,
@@ -222,11 +230,15 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
 pub fn lookup_metadata(
     Json(lookup): Json<RsLookupWrapper>,
 ) -> FnResult<Json<RsLookupMetadataResults>> {
-    let (galleries, next_page_key) = lookup_galleries(&lookup)?;
+    let (galleries, next_page_key, match_type) = lookup_galleries(&lookup)?;
 
     let results = galleries
         .into_iter()
-        .map(nhentai_gallery_to_result)
+        .map(|g| {
+            let mut result = nhentai_gallery_to_result(g);
+            result.match_type = match_type.clone();
+            result
+        })
         .collect();
 
     Ok(Json(RsLookupMetadataResults {
@@ -239,11 +251,15 @@ pub fn lookup_metadata(
 pub fn lookup_metadata_images(
     Json(lookup): Json<RsLookupWrapper>,
 ) -> FnResult<Json<Vec<ExternalImage>>> {
-    let (galleries, _) = lookup_galleries(&lookup)?;
+    let (galleries, _, match_type) = lookup_galleries(&lookup)?;
 
     let images: Vec<ExternalImage> = galleries
         .iter()
         .flat_map(nhentai_gallery_to_images)
+        .map(|mut img| {
+            img.match_type = match_type.clone();
+            img
+        })
         .collect();
 
     Ok(Json(deduplicate_images(images)))
@@ -269,7 +285,10 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
         Some(LookupTarget::DirectGallery(gallery_id)) => {
             let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
             if !galleries.is_empty() {
-                return Ok(Json(galleries_to_group_result(galleries)));
+                return Ok(Json(galleries_to_group_result(
+                    galleries,
+                    Some(RsLookupMatchType::ExactId),
+                )));
             }
             // Fall back to name search if the gallery returned nothing.
             match book
@@ -280,20 +299,23 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
             {
                 Some(name) => {
                     let (galleries, _) = execute_search_request(name, None, custom_search_params)?;
-                    Ok(Json(galleries_to_group_result(galleries)))
+                    Ok(Json(galleries_to_group_result(galleries, None)))
                 }
                 None => Ok(Json(RsLookupSourceResult::NotFound)),
             }
         }
         Some(LookupTarget::Search(search)) => {
             let (galleries, _) = execute_search_request(&search, None, custom_search_params)?;
-            Ok(Json(galleries_to_group_result(galleries)))
+            Ok(Json(galleries_to_group_result(galleries, None)))
         }
         _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
     }
 }
 
-fn gallery_to_group_download(gallery: NhentaiGallery) -> RsGroupDownload {
+fn gallery_to_group_download(
+    gallery: NhentaiGallery,
+    match_type: Option<RsLookupMatchType>,
+) -> RsGroupDownload {
     let requests: Vec<RsRequest> = gallery
         .images
         .iter()
@@ -317,6 +339,7 @@ fn gallery_to_group_download(gallery: NhentaiGallery) -> RsGroupDownload {
         },
         requests,
         infos,
+        match_type,
         ..Default::default()
     }
 }
@@ -452,13 +475,16 @@ fn relation_details_to_series_lookup_names(values: &[nhentai::NhentaiRelation]) 
         .collect()
 }
 
-fn galleries_to_group_result(galleries: Vec<NhentaiGallery>) -> RsLookupSourceResult {
+fn galleries_to_group_result(
+    galleries: Vec<NhentaiGallery>,
+    match_type: Option<RsLookupMatchType>,
+) -> RsLookupSourceResult {
     if galleries.is_empty() {
         return RsLookupSourceResult::NotFound;
     }
     let group_downloads = galleries
         .into_iter()
-        .map(gallery_to_group_download)
+        .map(|g| gallery_to_group_download(g, match_type.clone()))
         .collect();
     RsLookupSourceResult::GroupRequest(group_downloads)
 }
@@ -489,8 +515,9 @@ mod tests {
             params: None,
         };
 
-        let (galleries, _) = lookup_galleries(&lookup).expect("lookup should succeed");
+        let (galleries, _, match_type) = lookup_galleries(&lookup).expect("lookup should succeed");
         assert!(galleries.is_empty());
+        assert!(match_type.is_none());
     }
 
     #[test]
@@ -544,7 +571,7 @@ mod tests {
 
     #[test]
     fn galleries_to_group_result_empty_returns_not_found() {
-        let result = galleries_to_group_result(vec![]);
+        let result = galleries_to_group_result(vec![], None);
         assert!(matches!(result, RsLookupSourceResult::NotFound));
     }
 
@@ -570,7 +597,7 @@ mod tests {
             },
         ];
 
-        let result = galleries_to_group_result(galleries);
+        let result = galleries_to_group_result(galleries, Some(RsLookupMatchType::ExactId));
         let RsLookupSourceResult::GroupRequest(downloads) = result else {
             panic!("Expected GroupRequest");
         };
@@ -582,6 +609,8 @@ mod tests {
         );
         assert_eq!(downloads[1].requests.len(), 1);
         assert_eq!(downloads[1].requests[0].mime, Some("image/png".to_string()));
+        assert_eq!(downloads[0].match_type, Some(RsLookupMatchType::ExactId));
+        assert_eq!(downloads[1].match_type, Some(RsLookupMatchType::ExactId));
     }
 
     #[test]
@@ -595,11 +624,12 @@ mod tests {
             ..Default::default()
         };
 
-        let download = gallery_to_group_download(gallery);
+        let download = gallery_to_group_download(gallery, Some(RsLookupMatchType::ExactId));
         assert_eq!(download.requests[0].mime, Some("image/jpg".to_string()));
         assert_eq!(download.requests[1].mime, Some("image/webp".to_string()));
         assert!(download.requests[0].permanent);
         assert_eq!(download.requests[0].instant, Some(true));
+        assert_eq!(download.match_type, Some(RsLookupMatchType::ExactId));
     }
 
     #[test]
@@ -610,8 +640,9 @@ mod tests {
             ..Default::default()
         };
 
-        let download = gallery_to_group_download(gallery);
+        let download = gallery_to_group_download(gallery, None);
         assert!(download.group_thumbnail_url.is_none());
+        assert!(download.match_type.is_none());
     }
 
     #[test]
@@ -639,7 +670,7 @@ mod tests {
             ..Default::default()
         };
 
-        let download = gallery_to_group_download(gallery);
+        let download = gallery_to_group_download(gallery, None);
         let infos = download.infos.expect("expected infos to be set");
         assert_eq!(
             infos.add_people.expect("expected add_people")[0].id,
