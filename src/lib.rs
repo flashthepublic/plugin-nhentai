@@ -31,7 +31,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 13,
+        version: 15,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -177,20 +177,15 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
     }
 
     if let Some(ids) = book.ids.as_ref() {
-        if let Some(id) = ids.redseat.as_deref().and_then(parse_lookup_gallery_id) {
+        if let Some(id) = ids.redseat().and_then(parse_lookup_gallery_id) {
             return Some(LookupTarget::DirectGallery(id));
         }
 
-        if let Some(id) = ids.slug.as_deref().and_then(parse_lookup_gallery_id) {
+        if let Some(id) = ids.slug().and_then(parse_lookup_gallery_id) {
             return Some(LookupTarget::DirectGallery(id));
         }
 
-        if let Some(id) = ids.other_ids.as_ref().and_then(|other_ids| {
-            other_ids
-                .as_slice()
-                .iter()
-                .find_map(|value| parse_lookup_gallery_id(value))
-        }) {
+        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_lookup_gallery_id(value)) {
             return Some(LookupTarget::DirectGallery(id));
         }
     }
@@ -201,20 +196,15 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
     }
 
     if let Some(ids) = book.ids.as_ref() {
-        if let Some(term) = ids.redseat.as_deref().and_then(parse_relation_search_term) {
+        if let Some(term) = ids.redseat().and_then(parse_relation_search_term) {
             return Some(LookupTarget::Search(term));
         }
 
-        if let Some(term) = ids.slug.as_deref().and_then(parse_relation_search_term) {
+        if let Some(term) = ids.slug().and_then(parse_relation_search_term) {
             return Some(LookupTarget::Search(term));
         }
 
-        if let Some(term) = ids.other_ids.as_ref().and_then(|other_ids| {
-            other_ids
-                .as_slice()
-                .iter()
-                .find_map(|value| parse_relation_search_term(value))
-        }) {
+        if let Some(term) = ids.as_all_ids().iter().find_map(|value| parse_relation_search_term(value)) {
             return Some(LookupTarget::Search(term));
         }
     }
@@ -555,10 +545,7 @@ mod tests {
     fn resolve_target_reads_ids_other_ids() {
         let book = RsLookupBook {
             name: Some("ignored text".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai:67890".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai:67890".to_string()]).unwrap()),
             page_key: None,
         };
 
@@ -717,10 +704,7 @@ mod tests {
     fn resolve_target_relation_id_in_other_ids() {
         let book = RsLookupBook {
             name: Some("some book name".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai-artist:sasaki-musashi".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai-artist:sasaki-musashi".to_string()]).unwrap()),
             page_key: None,
         };
 
@@ -735,10 +719,7 @@ mod tests {
     fn resolve_target_gallery_id_preferred_over_relation() {
         let book = RsLookupBook {
             name: Some("nhentai:12345".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai-artist:bai-asuka".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai-artist:bai-asuka".to_string()]).unwrap()),
             page_key: None,
         };
 

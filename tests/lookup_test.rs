@@ -243,10 +243,7 @@ fn test_lookup_571095_returns_group_download() {
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("test".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai:571095".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai:571095".to_string()]).unwrap()),
             page_key: None,
         }),
         credential: None,
@@ -286,10 +283,7 @@ fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("cheating".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
         }),
         credential: None,
@@ -348,10 +342,7 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
             name: Some("cheating".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["nhentai:999999999".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
         }),
         credential: None,
