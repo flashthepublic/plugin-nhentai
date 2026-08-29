@@ -4,8 +4,8 @@ use extism::*;
 use rs_plugin_common_interfaces::{
     domain::rs_ids::RsIds,
     lookup::{
-        RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResults,
-        RsLookupMetadataResultWrapper, RsLookupQuery, RsLookupSourceResult, RsLookupWrapper,
+        RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResults, RsLookupQuery,
+        RsLookupSourceResult, RsLookupWrapper,
     },
     CustomParamTypes,
 };
@@ -159,6 +159,24 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
         "Expected at least one artist extracted from the gallery page"
     );
 
+    let relations = first.relations.as_ref().expect("Expected relations");
+    assert!(
+        relations
+            .people_details
+            .as_ref()
+            .map(|people| !people.is_empty())
+            .unwrap_or(false),
+        "Expected artist/character/group people relations"
+    );
+    assert!(
+        relations
+            .tags_details
+            .as_ref()
+            .map(|tags| !tags.is_empty())
+            .unwrap_or(false),
+        "Expected tag/language/category relations"
+    );
+
     assert!(
         first
             .relations
@@ -183,6 +201,36 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .as_ref()
             .and_then(|relations| relations.people_details.as_ref())
     );*/
+}
+
+#[test]
+fn test_lookup_direct_id_282849_returns_series_relation() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("nhentai:282849".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    let first = results.results.first().expect("Expected a gallery result");
+    let series = first
+        .relations
+        .as_ref()
+        .and_then(|relations| relations.series_details.as_ref())
+        .expect("Expected series relations");
+
+    assert!(
+        series.iter().any(|serie| {
+            serie.id == "nhentai-parody:air-gear" && serie.name.eq_ignore_ascii_case("air gear")
+        }),
+        "Expected the air gear parody as a series relation"
+    );
 }
 
 #[test]
@@ -266,10 +314,23 @@ fn test_lookup_571095_returns_group_download() {
                 !group.requests.is_empty(),
                 "Expected multiple image requests in group"
             );
-            println!("Got {} images for nhentai:571095", group.requests.len());
-            for req in &group.requests {
-                println!("  {}", req.url);
-            }
+            let infos = group.infos.as_ref().expect("Expected relation metadata");
+            assert!(
+                infos
+                    .add_people
+                    .as_ref()
+                    .map(|people| !people.is_empty())
+                    .unwrap_or(false),
+                "Expected people relations in the group download"
+            );
+            assert!(
+                infos
+                    .add_tags
+                    .as_ref()
+                    .map(|tags| !tags.is_empty())
+                    .unwrap_or(false),
+                "Expected tag relations in the group download"
+            );
         }
         other => panic!("Expected GroupRequest, got {:?}", other),
     }

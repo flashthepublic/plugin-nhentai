@@ -31,7 +31,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 15,
+        version: 16,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -85,12 +85,26 @@ fn execute_search_request(
 }
 
 fn execute_gallery_request(gallery_id: &str) -> FnResult<Vec<NhentaiGallery>> {
+    let api_url = format!("https://nhentai.net/api/v2/galleries/{gallery_id}");
+    if let Ok(body) = execute_request(api_url, "application/json") {
+        if let Some(gallery) = nhentai::parse_gallery_api_json(&body) {
+            return Ok(vec![gallery]);
+        }
+    }
+
     let body = execute_html_request(build_gallery_url(gallery_id))?;
     Ok(parse_gallery_html(&body, gallery_id).into_iter().collect())
 }
 
 fn execute_html_request(url: String) -> FnResult<String> {
-    let request = build_http_request(url);
+    execute_request(url, "text/html")
+}
+
+fn execute_request(url: String, accept: &str) -> FnResult<String> {
+    let mut request = build_http_request(url);
+    request
+        .headers
+        .insert("Accept".to_string(), accept.to_string());
     let res = http::request::<Vec<u8>>(&request, None);
 
     match res {
@@ -118,7 +132,11 @@ fn execute_html_request(url: String) -> FnResult<String> {
 
 fn lookup_galleries(
     lookup: &RsLookupWrapper,
-) -> FnResult<(Vec<NhentaiGallery>, Option<String>, Option<RsLookupMatchType>)> {
+) -> FnResult<(
+    Vec<NhentaiGallery>,
+    Option<String>,
+    Option<RsLookupMatchType>,
+)> {
     let book = match &lookup.query {
         RsLookupQuery::Book(book) => book,
         _ => return Ok((vec![], None, None)),
@@ -133,10 +151,7 @@ fn lookup_galleries(
             _ => None,
         });
 
-    let page = book
-        .page_key
-        .as_deref()
-        .and_then(|k| k.parse::<u32>().ok());
+    let page = book.page_key.as_deref().and_then(|k| k.parse::<u32>().ok());
 
     match resolve_book_lookup_target(book) {
         Some(LookupTarget::DirectGallery(gallery_id)) => {
@@ -185,7 +200,11 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
             return Some(LookupTarget::DirectGallery(id));
         }
 
-        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_lookup_gallery_id(value)) {
+        if let Some(id) = ids
+            .as_all_ids()
+            .iter()
+            .find_map(|value| parse_lookup_gallery_id(value))
+        {
             return Some(LookupTarget::DirectGallery(id));
         }
     }
@@ -204,7 +223,11 @@ fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
             return Some(LookupTarget::Search(term));
         }
 
-        if let Some(term) = ids.as_all_ids().iter().find_map(|value| parse_relation_search_term(value)) {
+        if let Some(term) = ids
+            .as_all_ids()
+            .iter()
+            .find_map(|value| parse_relation_search_term(value))
+        {
             return Some(LookupTarget::Search(term));
         }
     }

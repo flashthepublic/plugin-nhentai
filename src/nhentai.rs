@@ -1,5 +1,6 @@
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
+use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NhentaiRelation {
@@ -29,7 +30,11 @@ pub struct NhentaiGallery {
     pub parody_details: Vec<NhentaiRelation>,
 }
 
-pub fn build_search_url(search: &str, page: Option<u32>, custom_search_params: Option<&str>) -> Option<String> {
+pub fn build_search_url(
+    search: &str,
+    page: Option<u32>,
+    custom_search_params: Option<&str>,
+) -> Option<String> {
     let trimmed = search.trim();
     if trimmed.is_empty() {
         return None;
@@ -71,16 +76,14 @@ pub fn build_gallery_url(gallery_id: &str) -> String {
 
 pub fn parse_relation_search_term(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    let without_prefix = trimmed
-        .strip_prefix("nhentai-")
-        .or_else(|| {
-            let lower = trimmed.to_ascii_lowercase();
-            if lower.starts_with("nhentai-") {
-                Some(&trimmed["nhentai-".len()..])
-            } else {
-                None
-            }
-        })?;
+    let without_prefix = trimmed.strip_prefix("nhentai-").or_else(|| {
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("nhentai-") {
+            Some(&trimmed["nhentai-".len()..])
+        } else {
+            None
+        }
+    })?;
 
     let (category, slug) = without_prefix.split_once(':')?;
     let slug = slug.trim();
@@ -233,6 +236,181 @@ pub fn parse_gallery_html(html: &str, gallery_id: &str) -> Option<NhentaiGallery
         tag_details: tag_buckets.tag_details,
         parody_details: tag_buckets.parody_details,
     })
+}
+
+#[derive(Deserialize)]
+struct ApiGallery {
+    id: u64,
+    title: ApiTitle,
+    cover: ApiImage,
+    #[serde(default)]
+    pages: Vec<ApiPage>,
+    #[serde(default)]
+    tags: Vec<ApiTag>,
+    num_pages: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ApiTitle {
+    #[serde(default)]
+    english: String,
+    #[serde(default)]
+    pretty: String,
+    japanese: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiImage {
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct ApiPage {
+    number: u32,
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct ApiTag {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    slug: String,
+}
+
+pub fn parse_gallery_api_json(json: &str) -> Option<NhentaiGallery> {
+    let api: ApiGallery = serde_json::from_str(json).ok()?;
+    let gallery_id = api.id.to_string();
+
+    let title = [&api.title.english, &api.title.pretty]
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .cloned()
+        .or_else(|| api.title.japanese.filter(|value| !value.trim().is_empty()))
+        .map(|value| clean_title(&value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("nhentai {gallery_id}"));
+
+    let cover_url = api_asset_url("https://t.nhentai.net", &api.cover.path);
+    let mut pages = api.pages;
+    pages.sort_by_key(|page| page.number);
+    let mut images = pages
+        .into_iter()
+        .map(|page| api_asset_url("https://i.nhentai.net", &page.path))
+        .filter(|url| !url.is_empty())
+        .collect::<Vec<_>>();
+    images = deduplicate_strings(images);
+    if images.is_empty() && !cover_url.is_empty() {
+        images.push(cover_url.clone());
+    }
+
+    let mut buckets = TagBuckets::default();
+    for tag in api.tags {
+        push_api_tag(&mut buckets, tag);
+    }
+
+    let parsed_page_count = u32::try_from(images.len()).ok().filter(|count| *count > 0);
+
+    Some(NhentaiGallery {
+        id: Some(gallery_id.clone()),
+        title,
+        cover_url,
+        gallery_url: build_gallery_url(&gallery_id),
+        images,
+        tags: buckets.tags,
+        artists: buckets.artists,
+        groups: buckets.groups,
+        parodies: buckets.parodies,
+        characters: buckets.characters,
+        languages: buckets.languages,
+        categories: buckets.categories,
+        pages: api.num_pages.or(parsed_page_count),
+        people_ids: buckets.people_ids,
+        tag_ids: buckets.tag_ids,
+        people_details: buckets.people_details,
+        tag_details: buckets.tag_details,
+        parody_details: buckets.parody_details,
+    })
+}
+
+fn push_api_tag(buckets: &mut TagBuckets, tag: ApiTag) {
+    let kind = tag.kind.trim().to_ascii_lowercase();
+    let name = normalize_text(&tag.name);
+    if name.is_empty() {
+        return;
+    }
+
+    let slug = if tag.slug.trim().is_empty() {
+        slugify_identifier(&name)
+    } else {
+        Some(tag.slug.trim().to_ascii_lowercase())
+    };
+    let Some(slug) = slug else {
+        return;
+    };
+
+    let relation_key = if kind == "tag" { "tags" } else { kind.as_str() };
+    let relation = NhentaiRelation {
+        id: format!("nhentai-{relation_key}:{slug}"),
+        name: name.clone(),
+    };
+
+    match kind.as_str() {
+        "tag" => {
+            push_unique(&mut buckets.tags, name);
+            push_unique(&mut buckets.tag_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.tag_details, relation);
+        }
+        "artist" => {
+            push_unique(&mut buckets.artists, name);
+            push_unique(&mut buckets.people_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.people_details, relation);
+        }
+        "group" => {
+            push_unique(&mut buckets.groups, name);
+            push_unique(&mut buckets.people_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.people_details, relation);
+        }
+        "parody" => {
+            push_unique(&mut buckets.parodies, name);
+            push_unique_relation(&mut buckets.parody_details, relation);
+        }
+        "character" => {
+            push_unique(&mut buckets.characters, name);
+            push_unique(&mut buckets.people_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.people_details, relation);
+        }
+        "language" => {
+            push_unique(&mut buckets.languages, name);
+            push_unique(&mut buckets.tag_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.tag_details, relation);
+        }
+        "category" => {
+            push_unique(&mut buckets.categories, name);
+            push_unique(&mut buckets.tag_ids, relation.id.clone());
+            push_unique_relation(&mut buckets.tag_details, relation);
+        }
+        _ => {}
+    }
+}
+
+fn api_asset_url(host: &str, path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        String::new()
+    } else if path.starts_with("https://") || path.starts_with("http://") {
+        path.to_string()
+    } else {
+        format!(
+            "{}/{}",
+            host.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
+    }
 }
 
 pub fn extract_gallery_id(value: &str) -> Option<String> {
@@ -710,11 +888,23 @@ fn push_all_unique(target: &mut Vec<String>, values: Vec<String>) {
     }
 }
 
+fn push_unique(target: &mut Vec<String>, value: String) {
+    if !target.iter().any(|existing| existing == &value) {
+        target.push(value);
+    }
+}
+
 fn push_all_unique_relations(target: &mut Vec<NhentaiRelation>, values: Vec<NhentaiRelation>) {
     for value in values {
         if !target.iter().any(|existing| existing.id == value.id) {
             target.push(value);
         }
+    }
+}
+
+fn push_unique_relation(target: &mut Vec<NhentaiRelation>, value: NhentaiRelation) {
+    if !target.iter().any(|existing| existing.id == value.id) {
+        target.push(value);
     }
 }
 
@@ -1222,5 +1412,93 @@ mod tests {
         );
         assert!(result.tag_details.is_empty());
         assert!(result.tag_ids.is_empty());
+    }
+
+    #[test]
+    fn parse_gallery_api_json_restores_all_relation_types() {
+        let json = r#"
+        {
+          "id": 629637,
+          "media_id": "3787238",
+          "title": {
+            "english": "[Artist] API Gallery",
+            "japanese": null,
+            "pretty": "API Gallery"
+          },
+          "cover": {
+            "path": "galleries/3787238/cover.webp.webp",
+            "width": 350,
+            "height": 494
+          },
+          "num_pages": 2,
+          "pages": [
+            {"number": 2, "path": "galleries/3787238/2.webp"},
+            {"number": 1, "path": "galleries/3787238/1.webp"}
+          ],
+          "tags": [
+            {"id": 1, "type": "tag", "name": "full color", "slug": "full-color", "url": "/tag/full-color/", "count": 10},
+            {"id": 2, "type": "artist", "name": "bai asuka", "slug": "bai-asuka", "url": "/artist/bai-asuka/", "count": 10},
+            {"id": 3, "type": "group", "name": "sample group", "slug": "sample-group", "url": "/group/sample-group/", "count": 10},
+            {"id": 4, "type": "character", "name": "sample character", "slug": "sample-character", "url": "/character/sample-character/", "count": 10},
+            {"id": 5, "type": "parody", "name": "sample series", "slug": "sample-series", "url": "/parody/sample-series/", "count": 10},
+            {"id": 6, "type": "language", "name": "english", "slug": "english", "url": "/language/english/", "count": 10},
+            {"id": 7, "type": "category", "name": "manga", "slug": "manga", "url": "/category/manga/", "count": 10}
+          ]
+        }
+        "#;
+
+        let result = parse_gallery_api_json(json).expect("gallery API should parse");
+
+        assert_eq!(result.id.as_deref(), Some("629637"));
+        assert_eq!(result.title, "API Gallery");
+        assert_eq!(result.pages, Some(2));
+        assert_eq!(
+            result.cover_url,
+            "https://t.nhentai.net/galleries/3787238/cover.webp.webp"
+        );
+        assert_eq!(
+            result.images,
+            vec![
+                "https://i.nhentai.net/galleries/3787238/1.webp".to_string(),
+                "https://i.nhentai.net/galleries/3787238/2.webp".to_string()
+            ]
+        );
+        assert_eq!(result.tags, vec!["full color"]);
+        assert_eq!(result.artists, vec!["bai asuka"]);
+        assert_eq!(result.groups, vec!["sample group"]);
+        assert_eq!(result.characters, vec!["sample character"]);
+        assert_eq!(result.parodies, vec!["sample series"]);
+        assert_eq!(result.languages, vec!["english"]);
+        assert_eq!(result.categories, vec!["manga"]);
+        assert_eq!(
+            result.people_ids,
+            vec![
+                "nhentai-artist:bai-asuka",
+                "nhentai-group:sample-group",
+                "nhentai-character:sample-character"
+            ]
+        );
+        assert_eq!(
+            result.tag_ids,
+            vec![
+                "nhentai-tags:full-color",
+                "nhentai-language:english",
+                "nhentai-category:manga"
+            ]
+        );
+        assert_eq!(result.people_details.len(), 3);
+        assert_eq!(result.tag_details.len(), 3);
+        assert_eq!(
+            result.parody_details,
+            vec![NhentaiRelation {
+                id: "nhentai-parody:sample-series".to_string(),
+                name: "sample series".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_gallery_api_json_rejects_invalid_json() {
+        assert!(parse_gallery_api_json("not json").is_none());
     }
 }
