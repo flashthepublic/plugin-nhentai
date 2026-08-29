@@ -4,3 +4,6 @@
 
 #[path = "../src/nhentai.rs"]
 mod nhentai;
+
+#[path = "../src/convert.rs"]
+mod convert;

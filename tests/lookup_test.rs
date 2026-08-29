@@ -170,11 +170,27 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
     );
     assert!(
         relations
+            .people_details
+            .as_ref()
+            .map(|people| people.iter().all(|person| person.kind.is_some()))
+            .unwrap_or(false),
+        "Expected every people relation to include its type"
+    );
+    assert!(
+        relations
             .tags_details
             .as_ref()
             .map(|tags| !tags.is_empty())
             .unwrap_or(false),
         "Expected tag/language/category relations"
+    );
+    assert!(
+        relations
+            .tags_details
+            .as_ref()
+            .map(|tags| tags.iter().all(|tag| tag.kind.is_some()))
+            .unwrap_or(false),
+        "Expected every tag relation to include its type"
     );
 
     assert!(

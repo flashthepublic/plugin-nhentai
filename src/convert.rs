@@ -128,6 +128,7 @@ fn build_people_details(values: &[NhentaiRelation]) -> Vec<Person> {
         .map(|value| Person {
             id: value.id.clone(),
             name: value.name.clone(),
+            kind: relation_kind(&value.id),
             generated: true,
             ..Default::default()
         })
@@ -142,7 +143,7 @@ fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
             id: value.id.clone(),
             name: value.name.clone(),
             parent: None,
-            kind: None,
+            kind: relation_kind(&value.id),
             alt: None,
             thumb: None,
             params: None,
@@ -153,6 +154,17 @@ fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
             path: "/".to_string(),
         })
         .collect()
+}
+
+fn relation_kind(id: &str) -> Option<String> {
+    let kind = id.strip_prefix("nhentai-")?.split_once(':')?.0;
+    match kind {
+        "tags" => Some("tag".to_string()),
+        "artist" | "group" | "character" | "language" | "category" | "parody" => {
+            Some(kind.to_string())
+        }
+        _ => None,
+    }
 }
 
 fn build_series(values: &[NhentaiRelation]) -> Vec<Serie> {
@@ -253,14 +265,34 @@ mod tests {
             title: "Soft Sample".to_string(),
             cover_url: "https://t3.nhentai.net/galleries/111/thumb.jpg".to_string(),
             gallery_url: "https://nhentai.net/g/12345/".to_string(),
-            people_details: vec![NhentaiRelation {
-                id: "nhentai-artist:bai-asuka".to_string(),
-                name: "bai asuka".to_string(),
-            }],
-            tag_details: vec![NhentaiRelation {
-                id: "nhentai-tags:full-color".to_string(),
-                name: "full color".to_string(),
-            }],
+            people_details: vec![
+                NhentaiRelation {
+                    id: "nhentai-artist:bai-asuka".to_string(),
+                    name: "bai asuka".to_string(),
+                },
+                NhentaiRelation {
+                    id: "nhentai-group:sample-group".to_string(),
+                    name: "sample group".to_string(),
+                },
+                NhentaiRelation {
+                    id: "nhentai-character:sample-character".to_string(),
+                    name: "sample character".to_string(),
+                },
+            ],
+            tag_details: vec![
+                NhentaiRelation {
+                    id: "nhentai-tags:full-color".to_string(),
+                    name: "full color".to_string(),
+                },
+                NhentaiRelation {
+                    id: "nhentai-language:english".to_string(),
+                    name: "english".to_string(),
+                },
+                NhentaiRelation {
+                    id: "nhentai-category:manga".to_string(),
+                    name: "manga".to_string(),
+                },
+            ],
             ..Default::default()
         });
 
@@ -270,8 +302,14 @@ mod tests {
 
         assert_eq!(people[0].id, "nhentai-artist:bai-asuka");
         assert_eq!(people[0].name, "bai asuka");
+        assert_eq!(people[0].kind.as_deref(), Some("artist"));
+        assert_eq!(people[1].kind.as_deref(), Some("group"));
+        assert_eq!(people[2].kind.as_deref(), Some("character"));
         assert_eq!(tags[0].id, "nhentai-tags:full-color");
         assert_eq!(tags[0].name, "full color");
+        assert_eq!(tags[0].kind.as_deref(), Some("tag"));
+        assert_eq!(tags[1].kind.as_deref(), Some("language"));
+        assert_eq!(tags[2].kind.as_deref(), Some("category"));
         assert!(relations.people.is_none());
         assert!(relations.tags.is_none());
     }
