@@ -9,6 +9,14 @@ use rs_plugin_common_interfaces::{
     },
     CustomParamTypes,
 };
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PaginatedLookupSourceResult {
+    result: RsLookupSourceResult,
+    next_page_key: Option<String>,
+}
 
 fn build_plugin() -> Plugin {
     let wasm = Wasm::file("target/wasm32-unknown-unknown/release/rs_plugin_nh.wasm");
@@ -16,12 +24,12 @@ fn build_plugin() -> Plugin {
     Plugin::new(&manifest, [], true).expect("Failed to create plugin")
 }
 
-fn call_lookup_source(plugin: &mut Plugin, input: &RsLookupWrapper) -> RsLookupSourceResult {
+fn call_lookup_source(plugin: &mut Plugin, input: &RsLookupWrapper) -> PaginatedLookupSourceResult {
     let input_str = serde_json::to_string(input).unwrap();
     let output = plugin
         .call::<&str, &[u8]>("lookup", &input_str)
         .expect("lookup call failed");
-    serde_json::from_slice(output).expect("Failed to parse lookup source result")
+    serde_json::from_slice(output).expect("Failed to parse paginated lookup source result")
 }
 
 fn call_lookup(plugin: &mut Plugin, input: &RsLookupWrapper) -> RsLookupMetadataResults {
@@ -318,10 +326,10 @@ fn test_lookup_571095_returns_group_download() {
     let output = plugin
         .call::<&str, &[u8]>("lookup", &input_str)
         .expect("lookup call failed");
-    let result: RsLookupSourceResult =
+    let result: PaginatedLookupSourceResult =
         serde_json::from_slice(output).expect("Failed to parse lookup output");
 
-    match result {
+    match result.result {
         RsLookupSourceResult::GroupRequest(groups) => {
             assert!(!groups.is_empty(), "Expected at least one group");
             let group = &groups[0];
@@ -397,7 +405,7 @@ fn test_lookup_returns_group_for_name_only_search() {
     };
 
     let result = call_lookup_source(&mut plugin, &input);
-    let RsLookupSourceResult::GroupRequest(groups) = result else {
+    let RsLookupSourceResult::GroupRequest(groups) = result.result else {
         panic!("Expected GroupRequest for name-only search");
     };
     assert!(
@@ -427,7 +435,7 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
     };
 
     let result = call_lookup_source(&mut plugin, &input);
-    let RsLookupSourceResult::GroupRequest(groups) = result else {
+    let RsLookupSourceResult::GroupRequest(groups) = result.result else {
         panic!("Expected GroupRequest from name fallback after unknown ID");
     };
     assert!(
@@ -470,6 +478,47 @@ fn test_lookup_metadata_search_returns_next_page_key() {
         results.results.len(),
         results.next_page_key
     );
+}
+
+#[test]
+fn test_lookup_source_search_returns_next_page_key() {
+    let mut plugin = build_plugin();
+
+    let first_page_input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let first_page = call_lookup_source(&mut plugin, &first_page_input);
+    let RsLookupSourceResult::GroupRequest(first_page_groups) = first_page.result else {
+        panic!("Expected grouped downloads on the first page");
+    };
+    let first_page_url = first_page_groups[0].requests[0].url.clone();
+    let next_page_key = first_page
+        .next_page_key
+        .expect("Expected a continuation cursor");
+    assert_eq!(next_page_key, "2");
+
+    let second_page_input = RsLookupWrapper {
+        query: RsLookupQuery::Book(RsLookupBook {
+            name: Some("cheating".to_string()),
+            ids: None,
+            page_key: Some(next_page_key),
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let second_page = call_lookup_source(&mut plugin, &second_page_input);
+    let RsLookupSourceResult::GroupRequest(second_page_groups) = second_page.result else {
+        panic!("Expected grouped downloads on the second page");
+    };
+    assert_ne!(first_page_url, second_page_groups[0].requests[0].url);
 }
 
 #[test]

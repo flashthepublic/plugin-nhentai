@@ -1,4 +1,5 @@
 use extism_pdk::{http, log, plugin_fn, FnResult, HttpRequest, Json, LogLevel, WithReturnCode};
+use serde::Serialize;
 use std::collections::HashSet;
 
 use rs_plugin_common_interfaces::{
@@ -26,12 +27,29 @@ enum LookupTarget {
     Search(String),
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginatedLookupSourceResult {
+    result: RsLookupSourceResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_page_key: Option<String>,
+}
+
+impl PaginatedLookupSourceResult {
+    fn new(result: RsLookupSourceResult, next_page_key: Option<String>) -> Self {
+        Self {
+            result,
+            next_page_key,
+        }
+    }
+}
+
 #[plugin_fn]
 pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 17,
+        version: 18,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -279,10 +297,15 @@ pub fn lookup_metadata_images(
 }
 
 #[plugin_fn]
-pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSourceResult>> {
+pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<PaginatedLookupSourceResult>> {
     let book = match &lookup.query {
         RsLookupQuery::Book(book) => book,
-        _ => return Ok(Json(RsLookupSourceResult::NotApplicable)),
+        _ => {
+            return Ok(Json(PaginatedLookupSourceResult::new(
+                RsLookupSourceResult::NotApplicable,
+                None,
+            )))
+        }
     };
 
     let custom_search_params = lookup
@@ -293,14 +316,18 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
             CustomParamTypes::Text(v) => v.as_deref(),
             _ => None,
         });
+    let page = book
+        .page_key
+        .as_deref()
+        .and_then(|key| key.parse::<u32>().ok());
 
     match resolve_book_lookup_target(book) {
         Some(LookupTarget::DirectGallery(gallery_id)) => {
             let galleries = execute_gallery_request(&gallery_id).unwrap_or_default();
             if !galleries.is_empty() {
-                return Ok(Json(galleries_to_group_result(
-                    galleries,
-                    Some(RsLookupMatchType::ExactId),
+                return Ok(Json(PaginatedLookupSourceResult::new(
+                    galleries_to_group_result(galleries, Some(RsLookupMatchType::ExactId)),
+                    None,
                 )));
             }
             // Fall back to name search if the gallery returned nothing.
@@ -311,17 +338,31 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<RsLookupSour
                 .filter(|n| !n.is_empty())
             {
                 Some(name) => {
-                    let (galleries, _) = execute_search_request(name, None, custom_search_params)?;
-                    Ok(Json(galleries_to_group_result(galleries, None)))
+                    let (galleries, next_page_key) =
+                        execute_search_request(name, page, custom_search_params)?;
+                    Ok(Json(PaginatedLookupSourceResult::new(
+                        galleries_to_group_result(galleries, None),
+                        next_page_key,
+                    )))
                 }
-                None => Ok(Json(RsLookupSourceResult::NotFound)),
+                None => Ok(Json(PaginatedLookupSourceResult::new(
+                    RsLookupSourceResult::NotFound,
+                    None,
+                ))),
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, _) = execute_search_request(&search, None, custom_search_params)?;
-            Ok(Json(galleries_to_group_result(galleries, None)))
+            let (galleries, next_page_key) =
+                execute_search_request(&search, page, custom_search_params)?;
+            Ok(Json(PaginatedLookupSourceResult::new(
+                galleries_to_group_result(galleries, None),
+                next_page_key,
+            )))
         }
-        _ => Ok(Json(RsLookupSourceResult::NotApplicable)),
+        _ => Ok(Json(PaginatedLookupSourceResult::new(
+            RsLookupSourceResult::NotApplicable,
+            None,
+        ))),
     }
 }
 
@@ -583,6 +624,27 @@ mod tests {
     fn galleries_to_group_result_empty_returns_not_found() {
         let result = galleries_to_group_result(vec![], None);
         assert!(matches!(result, RsLookupSourceResult::NotFound));
+    }
+
+    #[test]
+    fn paginated_lookup_source_result_uses_host_envelope() {
+        let result = PaginatedLookupSourceResult::new(
+            RsLookupSourceResult::Requests(vec![]),
+            Some("2".to_string()),
+        );
+
+        let value = serde_json::to_value(result).expect("serialize paginated lookup result");
+        assert_eq!(value["result"], serde_json::json!({ "requests": [] }));
+        assert_eq!(value["nextPageKey"], "2");
+    }
+
+    #[test]
+    fn paginated_lookup_source_result_omits_empty_cursor() {
+        let result = PaginatedLookupSourceResult::new(RsLookupSourceResult::NotFound, None);
+
+        let value = serde_json::to_value(result).expect("serialize paginated lookup result");
+        assert_eq!(value["result"], serde_json::json!("notFound"));
+        assert!(value.get("nextPageKey").is_none());
     }
 
     #[test]
