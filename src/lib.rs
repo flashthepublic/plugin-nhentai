@@ -15,12 +15,14 @@ use rs_plugin_common_interfaces::{
 
 mod convert;
 mod nhentai;
+mod retry;
 
 use convert::{nhentai_gallery_to_images, nhentai_gallery_to_result};
 use nhentai::{
     build_gallery_url, build_search_url, parse_gallery_html, parse_lookup_gallery_id,
     parse_relation_search_term, parse_search_html, parse_search_next_page, NhentaiGallery,
 };
+use retry::{is_retryable_status, jitter_seed, retry_delay, wait, MAX_HTTP_ATTEMPTS};
 
 enum LookupTarget {
     DirectGallery(String),
@@ -49,7 +51,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 18,
+        version: 19,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -123,29 +125,70 @@ fn execute_request(url: String, accept: &str) -> FnResult<String> {
     request
         .headers
         .insert("Accept".to_string(), accept.to_string());
-    let res = http::request::<Vec<u8>>(&request, None);
 
-    match res {
-        Ok(res) if res.status_code() >= 200 && res.status_code() < 300 => {
-            Ok(String::from_utf8_lossy(&res.body()).to_string())
-        }
-        Ok(res) => {
-            log!(
-                LogLevel::Error,
-                "nhentai HTTP error {}: {}",
-                res.status_code(),
-                String::from_utf8_lossy(&res.body())
-            );
-            Err(WithReturnCode::new(
-                extism_pdk::Error::msg(format!("HTTP error: {}", res.status_code())),
-                res.status_code() as i32,
-            ))
-        }
-        Err(e) => {
-            log!(LogLevel::Error, "nhentai request failed: {}", e);
-            Err(WithReturnCode(e, 500))
+    for attempt in 1..=MAX_HTTP_ATTEMPTS {
+        match http::request::<Vec<u8>>(&request, None) {
+            Ok(res) if (200..300).contains(&res.status_code()) => {
+                return Ok(String::from_utf8_lossy(&res.body()).to_string());
+            }
+            Ok(res) => {
+                let status = res.status_code();
+                if attempt < MAX_HTTP_ATTEMPTS && is_retryable_status(status) {
+                    let retry_after = res
+                        .headers()
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+                        .map(|(_, value)| value.as_str());
+                    let delay = retry_delay(attempt, retry_after, jitter_seed());
+                    log!(
+                        LogLevel::Warn,
+                        "nhentai HTTP error {}; retrying attempt {}/{} in {} ms",
+                        status,
+                        attempt + 1,
+                        MAX_HTTP_ATTEMPTS,
+                        delay.as_millis()
+                    );
+                    if wait(delay).is_err() {
+                        log!(LogLevel::Warn, "unable to wait before nhentai retry");
+                    }
+                    continue;
+                }
+
+                log!(
+                    LogLevel::Error,
+                    "nhentai HTTP error {}: {}",
+                    status,
+                    String::from_utf8_lossy(&res.body())
+                );
+                return Err(WithReturnCode::new(
+                    extism_pdk::Error::msg(format!("HTTP error: {status}")),
+                    status as i32,
+                ));
+            }
+            Err(error) => {
+                if attempt < MAX_HTTP_ATTEMPTS {
+                    let delay = retry_delay(attempt, None, jitter_seed());
+                    log!(
+                        LogLevel::Warn,
+                        "nhentai request failed: {}; retrying attempt {}/{} in {} ms",
+                        error,
+                        attempt + 1,
+                        MAX_HTTP_ATTEMPTS,
+                        delay.as_millis()
+                    );
+                    if wait(delay).is_err() {
+                        log!(LogLevel::Warn, "unable to wait before nhentai retry");
+                    }
+                    continue;
+                }
+
+                log!(LogLevel::Error, "nhentai request failed: {}", error);
+                return Err(WithReturnCode(error, 500));
+            }
         }
     }
+
+    unreachable!("HTTP retry loop always returns on its final attempt")
 }
 
 fn lookup_galleries(
