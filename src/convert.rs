@@ -2,7 +2,7 @@ use rs_plugin_common_interfaces::{
     domain::{
         book::Book,
         external_images::{ExternalImage, ImageType},
-        person::Person,
+        person::{Person, PersonType, PersonWithRoles},
         serie::Serie,
         tag::Tag,
         Relations,
@@ -121,16 +121,36 @@ fn default_language_code(languages: &[String]) -> Option<String> {
     }
 }
 
-fn build_people_details(values: &[NhentaiRelation]) -> Vec<Person> {
+fn build_people_details(values: &[NhentaiRelation]) -> Vec<PersonWithRoles> {
     values
         .iter()
         .filter(|value| !value.id.trim().is_empty() && !value.name.trim().is_empty())
-        .map(|value| Person {
-            id: value.id.clone(),
-            name: value.name.clone(),
-            kind: relation_kind(&value.id),
-            generated: true,
-            ..Default::default()
+        .filter_map(|value| {
+            let kind = match relation_kind(&value.id).as_deref() {
+                Some("artist") => PersonType::Author,
+                Some("group") => PersonType::Custom("group".to_string()),
+                Some("character") => PersonType::Character,
+                _ => return None,
+            };
+            let role = if kind == PersonType::Character {
+                kind.clone()
+            } else {
+                PersonType::Author
+            };
+            Some(PersonWithRoles {
+                person: Person {
+                    id: value.id.clone(),
+                    name: value.name.clone(),
+                    kind: Some(kind),
+                    generated: true,
+                    otherids: Some(vec![value.id.clone()].into()),
+                    ..Default::default()
+                },
+                // Fictional characters are separate from the artists/groups authoring
+                // the work; they are not characters portrayed by those authors.
+                roles: Some(vec![role]),
+                ..Default::default()
+            })
         })
         .collect()
 }
@@ -300,11 +320,30 @@ mod tests {
         let people = relations.people_details.expect("expected people_details");
         let tags = relations.tags_details.expect("expected tags_details");
 
-        assert_eq!(people[0].id, "nhentai-artist:bai-asuka");
-        assert_eq!(people[0].name, "bai asuka");
-        assert_eq!(people[0].kind.as_deref(), Some("artist"));
-        assert_eq!(people[1].kind.as_deref(), Some("group"));
-        assert_eq!(people[2].kind.as_deref(), Some("character"));
+        assert_eq!(people[0].person.id, "nhentai-artist:bai-asuka");
+        assert_eq!(people[0].person.name, "bai asuka");
+        assert_eq!(people.len(), 3);
+        assert_eq!(people[0].person.kind, Some(PersonType::Author));
+        assert_eq!(
+            people[1].person.kind,
+            Some(PersonType::Custom("group".into()))
+        );
+        for credit in &people[..2] {
+            assert_eq!(credit.roles, Some(vec![PersonType::Author]));
+            assert!(credit.characters.is_none());
+        }
+        let wire = serde_json::to_value(&people).unwrap();
+        assert_eq!(wire[0]["type"], "Author");
+        assert_eq!(wire[0]["roles"], json!(["Author"]));
+        assert_eq!(wire[0]["id"], "nhentai-artist:bai-asuka");
+        assert!(wire[0].get("person").is_none());
+        assert_eq!(people[2].person.id, "nhentai-character:sample-character");
+        assert_eq!(people[2].person.kind, Some(PersonType::Character));
+        assert_eq!(people[2].roles, Some(vec![PersonType::Character]));
+        assert!(people[2].characters.is_none());
+        assert_eq!(wire[2]["type"], "Character");
+        assert_eq!(wire[2]["roles"], json!(["Character"]));
+        assert!(wire[2].get("characters").is_none());
         assert_eq!(tags[0].id, "nhentai-tags:full-color");
         assert_eq!(tags[0].name, "full color");
         assert_eq!(tags[0].kind.as_deref(), Some("tag"));
