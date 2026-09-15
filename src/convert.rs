@@ -2,7 +2,7 @@ use rs_plugin_common_interfaces::{
     domain::{
         book::Book,
         external_images::{ExternalImage, ImageType},
-        person::Person,
+        person::{Person, PersonType, PersonWithRoles},
         serie::Serie,
         tag::Tag,
         Relations,
@@ -121,18 +121,30 @@ fn default_language_code(languages: &[String]) -> Option<String> {
     }
 }
 
-fn build_people_details(values: &[NhentaiRelation]) -> Vec<Person> {
+fn build_people_details(values: &[NhentaiRelation]) -> Vec<PersonWithRoles> {
     values
         .iter()
         .filter(|value| !value.id.trim().is_empty() && !value.name.trim().is_empty())
-        .map(|value| Person {
-            id: value.id.clone(),
-            name: value.name.clone(),
-            kind: relation_kind(&value.id),
-            generated: true,
-            ..Default::default()
+        .map(|value| {
+            Person {
+                id: value.id.clone(),
+                name: value.name.clone(),
+                kind: person_kind(&value.id),
+                generated: true,
+                ..Default::default()
+            }
+            .into()
         })
         .collect()
+}
+
+fn person_kind(id: &str) -> Option<PersonType> {
+    match relation_kind(id)?.as_str() {
+        "artist" => Some(PersonType::Author),
+        "character" => Some(PersonType::Character),
+        "group" => Some(PersonType::Custom("group".into())),
+        _ => None,
+    }
 }
 
 fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
@@ -300,11 +312,20 @@ mod tests {
         let people = relations.people_details.expect("expected people_details");
         let tags = relations.tags_details.expect("expected tags_details");
 
-        assert_eq!(people[0].id, "nhentai-artist:bai-asuka");
-        assert_eq!(people[0].name, "bai asuka");
-        assert_eq!(people[0].kind.as_deref(), Some("artist"));
-        assert_eq!(people[1].kind.as_deref(), Some("group"));
-        assert_eq!(people[2].kind.as_deref(), Some("character"));
+        assert_eq!(people[0].person.id, "nhentai-artist:bai-asuka");
+        assert_eq!(people[0].person.name, "bai asuka");
+        assert_eq!(
+            people[0].person.kind.as_ref().map(PersonType::as_str),
+            Some("Author")
+        );
+        assert_eq!(
+            people[1].person.kind.as_ref().map(PersonType::as_str),
+            Some("group")
+        );
+        assert_eq!(
+            people[2].person.kind.as_ref().map(PersonType::as_str),
+            Some("Character")
+        );
         assert_eq!(tags[0].id, "nhentai-tags:full-color");
         assert_eq!(tags[0].name, "full color");
         assert_eq!(tags[0].kind.as_deref(), Some("tag"));

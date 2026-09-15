@@ -40,7 +40,14 @@ pub fn build_search_url(
         return None;
     }
 
-    let mut query = format!("language:english {trimmed}");
+    let has_language = trimmed
+        .split_whitespace()
+        .any(|term| term.starts_with("language:"));
+    let mut query = if has_language {
+        trimmed.to_string()
+    } else {
+        format!("language:english {trimmed}")
+    };
     if let Some(params) = custom_search_params {
         let params = params.trim();
         if !params.is_empty() {
@@ -992,6 +999,14 @@ mod tests {
     fn build_search_url_adds_english_prefix() {
         let url = build_search_url("soft", None, None).expect("url");
         assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
+    }
+
+    #[test]
+    fn build_search_url_respects_explicit_language() {
+        assert_eq!(
+            build_search_url("language:japanese tag:color", Some(2), Some("-example")).unwrap(),
+            "https://nhentai.net/search/?q=language%3Ajapanese+tag%3Acolor+-example&page=2"
+        );
     }
 
     #[test]

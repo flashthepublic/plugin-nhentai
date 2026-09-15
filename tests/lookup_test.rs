@@ -49,6 +49,7 @@ fn test_lookup_empty_name_returns_404() {
             name: Some(String::new()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -75,6 +76,7 @@ fn test_lookup_exhibitionism_live_when_enabled() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -116,6 +118,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             name: Some("nhentai:629637".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -180,7 +183,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
         relations
             .people_details
             .as_ref()
-            .map(|people| people.iter().all(|person| person.kind.is_some()))
+            .map(|people| people.iter().all(|person| person.person.kind.is_some()))
             .unwrap_or(false),
         "Expected every people relation to include its type"
     );
@@ -236,6 +239,7 @@ fn test_lookup_direct_id_282849_returns_series_relation() {
             name: Some("nhentai:282849".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -266,6 +270,7 @@ fn test_lookup_direct_id_624988_parodies_returned() {
             name: Some("nhentai:624988".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -317,6 +322,7 @@ fn test_lookup_571095_returns_group_download() {
             name: Some("test".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:571095".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -370,6 +376,7 @@ fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
             name: Some("cheating".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -399,6 +406,7 @@ fn test_lookup_returns_group_for_name_only_search() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -429,6 +437,7 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
             name: Some("cheating".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -458,6 +467,7 @@ fn test_lookup_metadata_search_returns_next_page_key() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -489,6 +499,7 @@ fn test_lookup_source_search_returns_next_page_key() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -509,6 +520,7 @@ fn test_lookup_source_search_returns_next_page_key() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: Some(next_page_key),
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -530,6 +542,7 @@ fn test_lookup_metadata_relation_id_artist_search() {
             name: Some("nhentai-artist:bai-asuka".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -566,6 +579,7 @@ fn test_lookup_metadata_page_2_returns_different_results() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -579,6 +593,7 @@ fn test_lookup_metadata_page_2_returns_different_results() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: Some("2".to_string()),
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -617,6 +632,7 @@ fn test_lookup_metadata_with_custom_search_params() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -640,6 +656,7 @@ fn test_lookup_metadata_with_custom_search_params() {
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: Some(params),
@@ -665,4 +682,44 @@ fn test_lookup_metadata_with_custom_search_params() {
         "Without custom params first: {}, With custom params first: {}",
         id_without, id_with
     );
+}
+
+#[test]
+fn test_structured_unsupported_filter_is_not_silently_dropped() {
+    let mut plugin = build_plugin();
+    let input = serde_json::json!({
+        "query": {"book": {
+            "name": "sample title",
+            "people": [{"name": "someone", "role": "Director"}],
+            "tags": [{"name": "full color"}]
+        }}
+    })
+    .to_string();
+    let output = plugin.call::<&str, &[u8]>("lookup", &input).unwrap();
+    let result: PaginatedLookupSourceResult = serde_json::from_slice(output).unwrap();
+    assert!(matches!(result.result, RsLookupSourceResult::NotApplicable));
+    for export in ["lookup_metadata", "lookup_metadata_images"] {
+        let error = plugin.call::<&str, &[u8]>(export, &input).unwrap_err();
+        assert!(error.to_string().contains("Not supported"));
+    }
+}
+
+#[test]
+fn test_structured_people_filter_without_title_across_exports() {
+    let mut plugin = build_plugin();
+    let input: RsLookupWrapper = serde_json::from_value(serde_json::json!({
+        "query": {"book": {
+            "people": [{"ids":{"nhentai-artist":"bai-asuka"}, "role":"Author"}]
+        }}
+    }))
+    .unwrap();
+    assert!(!call_lookup(&mut plugin, &input).results.is_empty());
+    assert!(matches!(call_lookup_source(&mut plugin, &input).result,
+        RsLookupSourceResult::GroupRequest(groups) if !groups.is_empty()));
+    let wire = serde_json::to_string(&input).unwrap();
+    let output = plugin
+        .call::<&str, &[u8]>("lookup_metadata_images", &wire)
+        .unwrap();
+    let images: Vec<serde_json::Value> = serde_json::from_slice(output).unwrap();
+    assert!(!images.is_empty());
 }
