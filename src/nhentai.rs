@@ -40,14 +40,7 @@ pub fn build_search_url(
         return None;
     }
 
-    let has_language = trimmed
-        .split_whitespace()
-        .any(|term| term.starts_with("language:"));
-    let mut query = if has_language {
-        trimmed.to_string()
-    } else {
-        format!("language:english {trimmed}")
-    };
+    let mut query = trimmed.to_string();
     if let Some(params) = custom_search_params {
         let params = params.trim();
         if !params.is_empty() {
@@ -996,9 +989,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_search_url_adds_english_prefix() {
+    fn build_search_url_does_not_add_implicit_language() {
         let url = build_search_url("soft", None, None).expect("url");
-        assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
+        assert_eq!(url, "https://nhentai.net/search/?q=soft");
     }
 
     #[test]
@@ -1012,31 +1005,25 @@ mod tests {
     #[test]
     fn build_search_url_appends_page() {
         let url = build_search_url("soft", Some(3), None).expect("url");
-        assert_eq!(
-            url,
-            "https://nhentai.net/search/?q=language%3Aenglish+soft&page=3"
-        );
+        assert_eq!(url, "https://nhentai.net/search/?q=soft&page=3");
     }
 
     #[test]
     fn build_search_url_page_one_omits_param() {
         let url = build_search_url("soft", Some(1), None).expect("url");
-        assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
+        assert_eq!(url, "https://nhentai.net/search/?q=soft");
     }
 
     #[test]
     fn build_search_url_appends_custom_params() {
         let url = build_search_url("soft", None, Some("-yaoi")).expect("url");
-        assert_eq!(
-            url,
-            "https://nhentai.net/search/?q=language%3Aenglish+soft+-yaoi"
-        );
+        assert_eq!(url, "https://nhentai.net/search/?q=soft+-yaoi");
     }
 
     #[test]
     fn build_search_url_ignores_empty_custom_params() {
         let url = build_search_url("soft", None, Some("  ")).expect("url");
-        assert_eq!(url, "https://nhentai.net/search/?q=language%3Aenglish+soft");
+        assert_eq!(url, "https://nhentai.net/search/?q=soft");
     }
 
     #[test]
