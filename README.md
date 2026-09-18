@@ -21,6 +21,8 @@ Filters can be combined or used without a title:
 
 - Filters are combined with AND; native nhentai relation IDs take precedence
   over display names. Names containing spaces are quoted.
+- Legacy `author` searches try the strict artist query first, then retry as an
+  unscoped creator search so group-only creators can still be found.
 - People IDs support `nhentai-artist:`, `nhentai-group:`, and
   `nhentai-character:`. Name-only people without a role use a broad text search.
   `Author` maps to artist, `Character` to character; custom roles `artist`,
@@ -33,8 +35,9 @@ Filters can be combined or used without a title:
   make the search unsupported instead of silently dropping a constraint.
 - Direct gallery IDs retain priority. If retrieval fails, the fallback name
   search includes the supplied filters.
-- English remains the default language unless the query explicitly supplies a
-  language. `custom_search_params` and pagination still apply.
+- No language filter is added implicitly. Add `language:english` to
+  `custom_search_params` when English-only results are wanted; custom search
+  parameters and pagination apply to every search request.
 - People metadata uses the flattened `PersonWithRoles` format, with canonical
   `Author` and `Character` types and the custom `group` type.
 

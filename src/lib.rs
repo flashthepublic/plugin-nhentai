@@ -52,7 +52,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 19,
+        version: 20,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -103,6 +103,31 @@ fn execute_search_request(
         parse_search_next_page(&body, current_page).map(|p| p.to_string())
     };
     Ok((galleries, next_page_key))
+}
+
+fn execute_book_search_request(
+    book: &RsLookupBook,
+    search: &str,
+    base: Option<String>,
+    page: Option<u32>,
+    custom_search_params: Option<&str>,
+) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
+    let result = execute_search_request(search, page, custom_search_params)?;
+    if !result.0.is_empty() {
+        return Ok(result);
+    }
+
+    let Some(fallback) = search::author_fallback_search(book, base) else {
+        return Ok(result);
+    };
+    execute_search_request(&fallback, page, custom_search_params)
+}
+
+fn legacy_search_base(book: &RsLookupBook) -> Option<String> {
+    match resolve_legacy_book_lookup_target(book) {
+        Some(LookupTarget::Search(search)) => Some(search),
+        _ => None,
+    }
 }
 
 fn execute_gallery_request(gallery_id: &str) -> FnResult<Vec<NhentaiGallery>> {
@@ -231,16 +256,26 @@ fn lookup_galleries(
                     .map(str::to_string),
             ) {
                 Some(name) => {
-                    let (galleries, next_page_key) =
-                        execute_search_request(&name, page, custom_search_params)?;
+                    let (galleries, next_page_key) = execute_book_search_request(
+                        book,
+                        &name,
+                        Some(name.clone()),
+                        page,
+                        custom_search_params,
+                    )?;
                     Ok((galleries, next_page_key, None))
                 }
                 None => Ok((vec![], None, None)),
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, next_page_key) =
-                execute_search_request(&search, page, custom_search_params)?;
+            let (galleries, next_page_key) = execute_book_search_request(
+                book,
+                &search,
+                legacy_search_base(book),
+                page,
+                custom_search_params,
+            )?;
             Ok((galleries, next_page_key, None))
         }
         _ => Err(WithReturnCode::new(
@@ -398,8 +433,13 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<PaginatedLoo
                     .map(str::to_string),
             ) {
                 Some(name) => {
-                    let (galleries, next_page_key) =
-                        execute_search_request(&name, page, custom_search_params)?;
+                    let (galleries, next_page_key) = execute_book_search_request(
+                        book,
+                        &name,
+                        Some(name.clone()),
+                        page,
+                        custom_search_params,
+                    )?;
                     Ok(Json(PaginatedLookupSourceResult::new(
                         galleries_to_group_result(galleries, None),
                         next_page_key,
@@ -412,8 +452,13 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<PaginatedLoo
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, next_page_key) =
-                execute_search_request(&search, page, custom_search_params)?;
+            let (galleries, next_page_key) = execute_book_search_request(
+                book,
+                &search,
+                legacy_search_base(book),
+                page,
+                custom_search_params,
+            )?;
             Ok(Json(PaginatedLookupSourceResult::new(
                 galleries_to_group_result(galleries, None),
                 next_page_key,

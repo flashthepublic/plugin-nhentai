@@ -723,3 +723,71 @@ fn test_structured_people_filter_without_title_across_exports() {
     let images: Vec<serde_json::Value> = serde_json::from_slice(output).unwrap();
     assert!(!images.is_empty());
 }
+
+#[test]
+fn test_structured_tag_filter_without_title() {
+    let mut plugin = build_plugin();
+    let input: RsLookupWrapper = serde_json::from_value(serde_json::json!({
+        "query": {"book": {
+            "tags": [{"name": "cheating"}]
+        }}
+    }))
+    .unwrap();
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected results for structured tag filter 'cheating'"
+    );
+}
+
+#[test]
+fn test_structured_tag_filter_with_english_language_param() {
+    let mut plugin = build_plugin();
+    let mut params = HashMap::new();
+    params.insert(
+        "custom_search_params".to_string(),
+        CustomParamTypes::Text(Some("language:english".to_string())),
+    );
+    let input: RsLookupWrapper = serde_json::from_value(serde_json::json!({
+        "query": {"book": {
+            "tags": [{"name": "cheating"}]
+        }},
+        "params": params
+    }))
+    .unwrap();
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected English results for structured tag filter 'cheating'"
+    );
+}
+
+#[test]
+fn test_structured_cheating_tag_with_user_exclusions() {
+    let mut plugin = build_plugin();
+    let mut params = HashMap::new();
+    params.insert(
+        "custom_search_params".to_string(),
+        CustomParamTypes::Text(Some(
+            "-yaoi -lolicon -tag:\"gender-bender\" -shemale".to_string(),
+        )),
+    );
+    let input: RsLookupWrapper = serde_json::from_value(serde_json::json!({
+        "query": {"book": {
+            "name": null,
+            "ids": null,
+            "tags": [{"name": "cheating"}]
+        }},
+        "credential": null,
+        "params": params
+    }))
+    .unwrap();
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected results for cheating with user exclusions"
+    );
+}

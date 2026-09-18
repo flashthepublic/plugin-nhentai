@@ -8,9 +8,30 @@ use crate::nhentai::parse_relation_search_term;
 /// Combine constraints with AND. Unresolvable constraints must not silently
 /// become a broader search. Native relation IDs take precedence over names.
 pub fn book_search(book: &RsLookupBook, base: Option<String>) -> Option<String> {
+    book_search_with_author_mode(book, base, false)
+}
+
+/// Build the same query while treating the legacy `author` field as an
+/// unscoped creator name. nHentai stores some creators as groups rather than
+/// artists, so this is used only after the strict artist search is empty.
+pub fn author_fallback_search(book: &RsLookupBook, base: Option<String>) -> Option<String> {
+    let strict = book_search(book, base.clone())?;
+    let broad = book_search_with_author_mode(book, base, true)?;
+    (strict != broad).then_some(broad)
+}
+
+fn book_search_with_author_mode(
+    book: &RsLookupBook,
+    base: Option<String>,
+    broad_author: bool,
+) -> Option<String> {
     let mut terms: Vec<String> = base.into_iter().collect();
     if let Some(author) = book.author.as_deref().filter(|v| !v.trim().is_empty()) {
-        terms.push(filter_term(Some(author), None, &["artist"], "artist")?);
+        terms.push(if broad_author {
+            filter_term(Some(author), None, &["artist", "group"], "")?
+        } else {
+            filter_term(Some(author), None, &["artist"], "artist")?
+        });
     }
     for person in book.people.iter().flatten() {
         let (categories, fallback): (&[&str], &str) = match person.role.as_ref() {
@@ -178,5 +199,23 @@ mod tests {
             Some("title")
         );
         assert!(book_search(&RsLookupBook::default(), None).is_none());
+    }
+
+    #[test]
+    fn legacy_author_fallback_can_match_artist_or_group() {
+        let book: RsLookupBook = serde_json::from_value(json!({
+            "name": "sample title",
+            "author": "rokumarusou"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            book_search(&book, Some("sample title".into())).as_deref(),
+            Some("sample title artist:rokumarusou")
+        );
+        assert_eq!(
+            author_fallback_search(&book, Some("sample title".into())).as_deref(),
+            Some("sample title rokumarusou")
+        );
     }
 }
