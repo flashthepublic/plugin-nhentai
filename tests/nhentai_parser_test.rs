@@ -7,3 +7,6 @@ mod nhentai;
 
 #[path = "../src/convert.rs"]
 mod convert;
+
+#[path = "../src/search.rs"]
+mod search;

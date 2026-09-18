@@ -16,6 +16,7 @@ use rs_plugin_common_interfaces::{
 mod convert;
 mod nhentai;
 mod retry;
+mod search;
 
 use convert::{nhentai_gallery_to_images, nhentai_gallery_to_result};
 use nhentai::{
@@ -51,7 +52,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 19,
+        version: 21,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -102,6 +103,31 @@ fn execute_search_request(
         parse_search_next_page(&body, current_page).map(|p| p.to_string())
     };
     Ok((galleries, next_page_key))
+}
+
+fn execute_book_search_request(
+    book: &RsLookupBook,
+    search: &str,
+    base: Option<String>,
+    page: Option<u32>,
+    custom_search_params: Option<&str>,
+) -> FnResult<(Vec<NhentaiGallery>, Option<String>)> {
+    let result = execute_search_request(search, page, custom_search_params)?;
+    if !result.0.is_empty() {
+        return Ok(result);
+    }
+
+    let Some(fallback) = search::author_fallback_search(book, base) else {
+        return Ok(result);
+    };
+    execute_search_request(&fallback, page, custom_search_params)
+}
+
+fn legacy_search_base(book: &RsLookupBook) -> Option<String> {
+    match resolve_legacy_book_lookup_target(book) {
+        Some(LookupTarget::Search(search)) => Some(search),
+        _ => None,
+    }
 }
 
 fn execute_gallery_request(gallery_id: &str) -> FnResult<Vec<NhentaiGallery>> {
@@ -221,23 +247,35 @@ fn lookup_galleries(
                 return Ok((galleries, None, Some(RsLookupMatchType::ExactId)));
             }
             // Gallery lookup returned nothing; fall back to name search if available.
-            match book
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-            {
+            match search::book_search(
+                book,
+                book.name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string),
+            ) {
                 Some(name) => {
-                    let (galleries, next_page_key) =
-                        execute_search_request(name, page, custom_search_params)?;
+                    let (galleries, next_page_key) = execute_book_search_request(
+                        book,
+                        &name,
+                        Some(name.clone()),
+                        page,
+                        custom_search_params,
+                    )?;
                     Ok((galleries, next_page_key, None))
                 }
                 None => Ok((vec![], None, None)),
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, next_page_key) =
-                execute_search_request(&search, page, custom_search_params)?;
+            let (galleries, next_page_key) = execute_book_search_request(
+                book,
+                &search,
+                legacy_search_base(book),
+                page,
+                custom_search_params,
+            )?;
             Ok((galleries, next_page_key, None))
         }
         _ => Err(WithReturnCode::new(
@@ -248,6 +286,18 @@ fn lookup_galleries(
 }
 
 fn resolve_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
+    let target = resolve_legacy_book_lookup_target(book);
+    if matches!(target, Some(LookupTarget::DirectGallery(_))) {
+        return target;
+    }
+    let base = match target {
+        Some(LookupTarget::Search(search)) => Some(search),
+        _ => None,
+    };
+    search::book_search(book, base).map(LookupTarget::Search)
+}
+
+fn resolve_legacy_book_lookup_target(book: &RsLookupBook) -> Option<LookupTarget> {
     if let Some(id) = book.name.as_deref().and_then(parse_lookup_gallery_id) {
         return Some(LookupTarget::DirectGallery(id));
     }
@@ -374,15 +424,22 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<PaginatedLoo
                 )));
             }
             // Fall back to name search if the gallery returned nothing.
-            match book
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|n| !n.is_empty())
-            {
+            match search::book_search(
+                book,
+                book.name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string),
+            ) {
                 Some(name) => {
-                    let (galleries, next_page_key) =
-                        execute_search_request(name, page, custom_search_params)?;
+                    let (galleries, next_page_key) = execute_book_search_request(
+                        book,
+                        &name,
+                        Some(name.clone()),
+                        page,
+                        custom_search_params,
+                    )?;
                     Ok(Json(PaginatedLookupSourceResult::new(
                         galleries_to_group_result(galleries, None),
                         next_page_key,
@@ -395,8 +452,13 @@ pub fn lookup(Json(lookup): Json<RsLookupWrapper>) -> FnResult<Json<PaginatedLoo
             }
         }
         Some(LookupTarget::Search(search)) => {
-            let (galleries, next_page_key) =
-                execute_search_request(&search, page, custom_search_params)?;
+            let (galleries, next_page_key) = execute_book_search_request(
+                book,
+                &search,
+                legacy_search_base(book),
+                page,
+                custom_search_params,
+            )?;
             Ok(Json(PaginatedLookupSourceResult::new(
                 galleries_to_group_result(galleries, None),
                 next_page_key,
@@ -625,6 +687,7 @@ mod tests {
                 name: Some(String::new()),
                 ids: None,
                 page_key: None,
+                ..Default::default()
             }),
             credential: None,
             params: None,
@@ -635,12 +698,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_target_supports_filter_only_wire_query() {
+        let book = serde_json::from_value(serde_json::json!({
+            "tags": [{"name": "full color"}], "pageKey": "2"
+        }))
+        .unwrap();
+        match resolve_book_lookup_target(&book) {
+            Some(LookupTarget::Search(term)) => assert_eq!(term, "tag:\"full color\""),
+            _ => panic!("expected filter search"),
+        }
+        let direct = RsLookupBook {
+            name: Some("nhentai:12345".into()),
+            ..book
+        };
+        assert!(matches!(
+            resolve_book_lookup_target(&direct),
+            Some(LookupTarget::DirectGallery(_))
+        ));
+    }
+
+    #[test]
     fn resolve_target_prefers_direct_name_id() {
         let book = RsLookupBook {
             author: None,
             name: Some("nhentai:12345".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -657,6 +741,7 @@ mod tests {
             name: Some("ignored text".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:67890".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -823,6 +908,7 @@ mod tests {
             name: Some("nhentai-group:maiju".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -839,6 +925,7 @@ mod tests {
             name: Some("some book name".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai-artist:sasaki-musashi".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -855,6 +942,7 @@ mod tests {
             name: Some("nhentai:12345".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai-artist:bai-asuka".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);
@@ -871,6 +959,7 @@ mod tests {
             name: Some("nhentai-tags:full-color".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_book_lookup_target(&book);

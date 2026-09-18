@@ -126,12 +126,7 @@ fn build_people_details(values: &[NhentaiRelation]) -> Vec<PersonWithRoles> {
         .iter()
         .filter(|value| !value.id.trim().is_empty() && !value.name.trim().is_empty())
         .filter_map(|value| {
-            let kind = match relation_kind(&value.id).as_deref() {
-                Some("artist") => PersonType::Author,
-                Some("group") => PersonType::Custom("group".to_string()),
-                Some("character") => PersonType::Character,
-                _ => return None,
-            };
+            let kind = person_kind(&value.id)?;
             let role = if kind == PersonType::Character {
                 kind.clone()
             } else {
@@ -153,6 +148,15 @@ fn build_people_details(values: &[NhentaiRelation]) -> Vec<PersonWithRoles> {
             })
         })
         .collect()
+}
+
+fn person_kind(id: &str) -> Option<PersonType> {
+    match relation_kind(id)?.as_str() {
+        "artist" => Some(PersonType::Author),
+        "character" => Some(PersonType::Character),
+        "group" => Some(PersonType::Custom("group".into())),
+        _ => None,
+    }
 }
 
 fn build_tag_details(values: &[NhentaiRelation]) -> Vec<Tag> {
