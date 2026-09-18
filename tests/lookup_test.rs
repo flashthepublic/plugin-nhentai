@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use extism::*;
 use rs_plugin_common_interfaces::{
-    domain::rs_ids::RsIds,
+    domain::{person::PersonType, rs_ids::RsIds},
     lookup::{
         RsLookupBook, RsLookupMetadataResult, RsLookupMetadataResults, RsLookupQuery,
         RsLookupSourceResult, RsLookupWrapper,
@@ -46,6 +46,7 @@ fn test_lookup_empty_name_returns_404() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some(String::new()),
             ids: None,
             page_key: None,
@@ -73,6 +74,7 @@ fn test_lookup_exhibitionism_live_when_enabled() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -115,6 +117,7 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("nhentai:629637".to_string()),
             ids: None,
             page_key: None,
@@ -177,13 +180,20 @@ fn test_lookup_direct_id_629637_live_when_enabled() {
             .as_ref()
             .map(|people| !people.is_empty())
             .unwrap_or(false),
-        "Expected artist/character/group people relations"
+        "Expected artist/group author credits and separate characters"
     );
     assert!(
         relations
             .people_details
             .as_ref()
-            .map(|people| people.iter().all(|person| person.person.kind.is_some()))
+            .map(|people| people.iter().all(|credit| {
+                let expected = if credit.person.id.starts_with("nhentai-character:") {
+                    PersonType::Character
+                } else {
+                    PersonType::Author
+                };
+                credit.person.kind.is_some() && credit.roles == Some(vec![expected])
+            }))
             .unwrap_or(false),
         "Expected every people relation to include its type"
     );
@@ -236,6 +246,7 @@ fn test_lookup_direct_id_282849_returns_series_relation() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("nhentai:282849".to_string()),
             ids: None,
             page_key: None,
@@ -267,6 +278,7 @@ fn test_lookup_direct_id_624988_parodies_returned() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("nhentai:624988".to_string()),
             ids: None,
             page_key: None,
@@ -319,6 +331,7 @@ fn test_lookup_571095_returns_group_download() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("test".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:571095".to_string()]).unwrap()),
             page_key: None,
@@ -373,6 +386,7 @@ fn test_lookup_metadata_falls_back_to_name_search_on_unknown_id() {
     // nhentai:999999999 should not exist; the name "cheating" should produce search results.
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
@@ -403,6 +417,7 @@ fn test_lookup_returns_group_for_name_only_search() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -434,6 +449,7 @@ fn test_lookup_falls_back_to_name_search_on_unknown_id() {
     // nhentai:999999999 should not exist; the name "cheating" should produce search results.
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:999999999".to_string()]).unwrap()),
             page_key: None,
@@ -464,6 +480,7 @@ fn test_lookup_metadata_search_returns_next_page_key() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -496,6 +513,7 @@ fn test_lookup_source_search_returns_next_page_key() {
 
     let first_page_input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -517,6 +535,7 @@ fn test_lookup_source_search_returns_next_page_key() {
 
     let second_page_input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: Some(next_page_key),
@@ -539,6 +558,7 @@ fn test_lookup_metadata_relation_id_artist_search() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("nhentai-artist:bai-asuka".to_string()),
             ids: None,
             page_key: None,
@@ -576,6 +596,7 @@ fn test_lookup_metadata_page_2_returns_different_results() {
 
     let page1_input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -590,6 +611,7 @@ fn test_lookup_metadata_page_2_returns_different_results() {
 
     let page2_input = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: Some("2".to_string()),
@@ -629,6 +651,7 @@ fn test_lookup_metadata_with_custom_search_params() {
     // Search without custom params
     let input_without = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,
@@ -653,6 +676,7 @@ fn test_lookup_metadata_with_custom_search_params() {
 
     let input_with = RsLookupWrapper {
         query: RsLookupQuery::Book(RsLookupBook {
+            author: None,
             name: Some("cheating".to_string()),
             ids: None,
             page_key: None,

@@ -52,7 +52,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "nhentai_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata, PluginType::Lookup],
-        version: 20,
+        version: 21,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/plugin-nhentai".to_string()),
         publisher: "neckaros".into(),
@@ -683,6 +683,7 @@ mod tests {
     fn lookup_empty_book_name_returns_404() {
         let lookup = RsLookupWrapper {
             query: RsLookupQuery::Book(RsLookupBook {
+                author: None,
                 name: Some(String::new()),
                 ids: None,
                 page_key: None,
@@ -719,6 +720,7 @@ mod tests {
     #[test]
     fn resolve_target_prefers_direct_name_id() {
         let book = RsLookupBook {
+            author: None,
             name: Some("nhentai:12345".to_string()),
             ids: None,
             page_key: None,
@@ -735,6 +737,7 @@ mod tests {
     #[test]
     fn resolve_target_reads_ids_other_ids() {
         let book = RsLookupBook {
+            author: None,
             name: Some("ignored text".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai:67890".to_string()]).unwrap()),
             page_key: None,
@@ -901,6 +904,7 @@ mod tests {
     #[test]
     fn resolve_target_relation_id_in_name() {
         let book = RsLookupBook {
+            author: None,
             name: Some("nhentai-group:maiju".to_string()),
             ids: None,
             page_key: None,
@@ -917,6 +921,7 @@ mod tests {
     #[test]
     fn resolve_target_relation_id_in_other_ids() {
         let book = RsLookupBook {
+            author: None,
             name: Some("some book name".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai-artist:sasaki-musashi".to_string()]).unwrap()),
             page_key: None,
@@ -933,6 +938,7 @@ mod tests {
     #[test]
     fn resolve_target_gallery_id_preferred_over_relation() {
         let book = RsLookupBook {
+            author: None,
             name: Some("nhentai:12345".to_string()),
             ids: Some(RsIds::try_from(vec!["nhentai-artist:bai-asuka".to_string()]).unwrap()),
             page_key: None,
@@ -949,6 +955,7 @@ mod tests {
     #[test]
     fn resolve_target_relation_id_in_name_tags_maps_to_tag() {
         let book = RsLookupBook {
+            author: None,
             name: Some("nhentai-tags:full-color".to_string()),
             ids: None,
             page_key: None,
